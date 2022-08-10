@@ -24,11 +24,13 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	odoh "github.com/cloudflare/odoh-go"
@@ -44,10 +46,88 @@ type targetServer struct {
 	experimentId       string
 }
 
+type zoneData struct {
+	zoneName  string
+	dnskeyRRs []dns.RR
+	dsRRs     []dns.RR
+}
+
+func (z zoneData) String() string {
+	builder := strings.Builder{}
+	builder.WriteString(z.zoneName)
+	builder.WriteString("\n")
+	for _, key := range z.dnskeyRRs {
+		builder.WriteString(key.String())
+		builder.WriteString("\n")
+	}
+	for _, ds := range z.dsRRs {
+		builder.WriteString(ds.String())
+		builder.WriteString("\n")
+	}
+	return builder.String()
+}
+
+type zoneStack []zoneData
+
+func (s zoneStack) isEmpty() bool {
+	return len(s) == 0
+}
+
+func (s zoneStack) push(v zoneData) zoneStack {
+	return append(s, v)
+}
+
+func (s zoneStack) pop() (zoneStack, zoneData) {
+	if s.isEmpty() {
+		return s, zoneData{}
+	} else {
+		l := len(s)
+		return s[:l-1], s[l-1]
+	}
+}
+
+func (s zoneStack) collect() []dns.RR {
+	rrs := make([]dns.RR, 0)
+	for _, z := range s {
+		rrs = append(rrs, z.dnskeyRRs...)
+		rrs = append(rrs, z.dsRRs...)
+	}
+
+	return rrs
+}
+
+func (s zoneStack) String() string {
+	builder := strings.Builder{}
+
+	for _, z := range s {
+		builder.WriteString(z.String())
+	}
+	return builder.String()
+}
+
 const (
 	dnsMessageContentType  = "application/dns-message"
 	odohMessageContentType = "application/oblivious-dns-message"
 )
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func countPopsRequired(currentDomain, targetDomain string) (int, error) {
+	for i := 0; i < 256; i++ {
+		idxCurrent, startCurrent := dns.PrevLabel(currentDomain, i)
+		idxTarget, startTarget := dns.PrevLabel(targetDomain, i)
+		if startCurrent || startTarget || currentDomain[idxCurrent:] != targetDomain[idxTarget:] {
+			return i, nil
+		}
+	}
+
+	return 0, errors.New("Domains exceed the max length.")
+}
 
 func decodeDNSQuestion(encodedMessage []byte) (*dns.Msg, error) {
 	msg := &dns.Msg{}
@@ -86,7 +166,150 @@ func (s *targetServer) parseQueryFromRequest(r *http.Request) (*dns.Msg, error) 
 	}
 }
 
+func (s *targetServer) fetchSingleDnssecRecord(domainName string, r resolver, dnssec bool, qtype uint16) ([]dns.RR, error) {
+	dnsQuery := new(dns.Msg)
+	dnsQuery.SetQuestion(dns.Fqdn(domainName), qtype)
+	if dnssec {
+		dnsQuery.SetEdns0(4096, true)
+	}
+	packedDnsQuery, err := dnsQuery.Pack()
+	if err != nil {
+		log.Println("Failed encoding DNS query:", err)
+		return nil, err
+	}
+
+	if s.verbose {
+		log.Printf("Query=%s\n", packedDnsQuery)
+	}
+
+	start := time.Now()
+	response, err := r.resolve(dnsQuery)
+	if err != nil {
+		log.Println("Failed to resolve query:", err)
+		return nil, err
+	}
+	elapsed := time.Since(start)
+
+	packedResponse, err := response.Pack()
+	if err != nil {
+		log.Println("Failed encoding DNS response:", err)
+		return nil, err
+	}
+
+	if s.verbose {
+		log.Printf("Answer=%s elapsed=%s\n", packedResponse, elapsed.String())
+	}
+
+	return response.Answer, err
+}
+
+func (s *targetServer) fetchDnskeyRecord(domainName string, r resolver, dnssec bool) ([]dns.RR, error) {
+	return s.fetchSingleDnssecRecord(domainName, r, dnssec, dns.TypeDNSKEY)
+}
+
+func (s *targetServer) fetchDsRecord(domainName string, r resolver, dnssec bool) ([]dns.RR, error) {
+	return s.fetchSingleDnssecRecord(domainName, r, dnssec, dns.TypeDS)
+}
+
+func containsCNAME(rrs []dns.RR) (*dns.CNAME, bool) {
+	for _, rr := range rrs {
+		switch rr.(type) {
+		case *dns.CNAME:
+			return rr.(*dns.CNAME), true
+		}
+	}
+	return nil, false
+}
+
+func (s *targetServer) fetchDnssecRecords(targetDomain string, r resolver, dnssec bool) ([]dns.RR, error) {
+	// Initialize empty stack
+	stack := make(zoneStack, 0)
+	zones := append(dns.SplitDomainName(targetDomain), "")
+
+	// 2) Iterate down zone hierarchy starting at root
+	for i := len(zones) - 1; i >= 0; i-- {
+	start:
+		currentZone := dns.Fqdn(strings.Join(zones[i:], "."))
+
+		// Request DNSKEYs and RRSIG DNSKEYs for the current zone
+		dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r, dnssec)
+		if err != nil {
+			return nil, err
+		}
+
+		// If r contains a CNAME, replace the target with the one referenced in the
+		// CNAME. Then pop RRs off the stack for each zone until the new target is
+		// within the current zone. Jump to the top of the loop for this subdomain
+		// (e.g., if the target zone was "foo.example.com", then it should now be
+		// "a.b.c.foo.bar.com").
+		if cname, isCNAME := containsCNAME(dnskeyRRs); isCNAME {
+			targetDomain = cname.Target
+			zones = append(dns.SplitDomainName(targetDomain), "")
+
+			// TODO START HERE, step through with debugger (see examples in scratch buffer)
+			pops, err := countPopsRequired(currentZone, targetDomain)
+			if err != nil {
+				return nil, err
+			}
+
+			i += pops
+			for j := 0; j < pops; j++ {
+				stack, _ = stack.pop()
+			}
+
+			currentZone = dns.Fqdn(strings.Join(zones[i:], "."))
+
+			goto start
+		}
+
+		zone := zoneData{
+			zoneName: currentZone,
+		}
+
+		zone.dnskeyRRs = append(zone.dnskeyRRs, dnskeyRRs...)
+
+		// If current zone != ".", request DS and RRSIG DS for current zone.
+		if currentZone != "." {
+			dsRRs, err := s.fetchDsRecord(currentZone, r, dnssec)
+			if err != nil {
+				return nil, err
+			}
+			zone.dsRRs = append(zone.dsRRs, dsRRs...)
+		}
+		stack = stack.push(zone)
+
+	}
+	//    4) If r contains a DNAME, replace target suffix (which should equal the
+	//       current zone) with the one referenced in the
+	//       DNAME and replace current zone with the one referenced in the
+	//       DNAME. Then pop RRs off the stack for each zone until the new target is
+	//       within the current zone. Jump to the top of the loop for this subdomain
+	//       (e.g., if the current zone was "foo.example.com", then it should now be
+	//       "foo.bar.com").
+
+	// query for:
+	// - root zone "."
+
+	// DNSKEY ksk # confirm that this matches hardcoded public key
+	// DNSKEY zsk
+	// RRSIG DNSKEY
+
+	// - next zone repeat until this domain == target domain
+	// DNSKEY ksk # confirm that this matches hardcoded public key
+	// DNSKEY zsk
+	// RRSIG DNSKEY
+
+	// DS
+	// RRSIG DS
+
+	// (if this domain == target domain)
+	// TXT
+	// RRSIG TXT
+	return stack.collect(), nil
+}
+
 func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
+
 	packedQuery, err := q.Pack()
 	if err != nil {
 		log.Println("Failed encoding DNS query:", err)
@@ -110,6 +333,8 @@ func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte,
 	if s.verbose {
 		log.Printf("Answer=%s elapsed=%s\n", packedResponse, elapsed.String())
 	}
+
+	// _, err = s.fetchDnssecRecords(q.Question[0].Name, r, q.IsEdns0().Do())
 
 	return packedResponse, err
 }

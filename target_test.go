@@ -53,7 +53,8 @@ func (r localResolver) resolve(query *dns.Msg) (*dns.Msg, error) {
 		return nil, err
 	}
 
-	packed, ok := r.queryResponseMap[string(packedQuery)]
+	// Ignore the first two bytes which are the query ID. The query ID changes every time.
+	packed, ok := r.queryResponseMap[string(packedQuery[2:])]
 	if !ok {
 		return nil, errors.New("Failed to resolve")
 	}
@@ -64,7 +65,160 @@ func (r localResolver) resolve(query *dns.Msg) (*dns.Msg, error) {
 	return response, err
 }
 
-func createLocalResolver(t *testing.T) *localResolver {
+func createTestDS(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
+	q := new(dns.Msg)
+	q.SetQuestion(dns.Fqdn(domain), dns.TypeDS)
+	q.SetEdns0(4096, true)
+	packedQuery, err := q.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := new(dns.Msg)
+	r.SetReply(q)
+	dnskeyAnswers := make([]dns.RR, 2)
+	dnskeyAnswers[0] = &dns.DS{
+		Hdr: dns.RR_Header{
+			Name:   q.Question[0].Name,
+			Rrtype: dns.TypeDNSKEY,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		KeyTag:     35886,
+		Algorithm:  8,
+		DigestType: 2,
+		Digest:     "abcd",
+	}
+	dnskeyAnswers[1] = &dns.RRSIG{
+		Hdr: dns.RR_Header{
+			Name:   q.Question[0].Name,
+			Rrtype: dns.TypeRRSIG,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		TypeCovered: dns.TypeDS,
+		Algorithm:   0,
+		Labels:      0,
+		OrigTtl:     0,
+		Expiration:  0,
+		Inception:   0,
+		KeyTag:      0,
+		SignerName:  dns.Fqdn(domain),
+		Signature:   "abcd",
+	}
+
+	r.Answer = dnskeyAnswers
+	packedResponse, err := r.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ignore the first two bytes which are the query ID. The query ID changes every time.
+	return packedQuery[2:], packedResponse, r.Answer
+}
+
+func createTestDNSKEYs(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
+	q := new(dns.Msg)
+	q.SetQuestion(dns.Fqdn(domain), dns.TypeDNSKEY)
+	q.SetEdns0(4096, true)
+	packedQuery, err := q.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := new(dns.Msg)
+	r.SetReply(q)
+	dnskeyAnswers := make([]dns.RR, 0)
+
+	if domain == "a.foo.bar.com." {
+		answerCNAME := &dns.CNAME{
+			Hdr: dns.RR_Header{
+				Name:   q.Question[0].Name,
+				Rrtype: dns.TypeDNSKEY,
+				Class:  dns.ClassINET,
+				Ttl:    0,
+			},
+			Target: dns.Fqdn("app.example.com."),
+		}
+		dnskeyAnswers = append(dnskeyAnswers, answerCNAME)
+		answerRRSIG := &dns.RRSIG{
+			Hdr: dns.RR_Header{
+				Name:   q.Question[0].Name,
+				Rrtype: dns.TypeRRSIG,
+				Class:  dns.ClassINET,
+				Ttl:    0,
+			},
+			TypeCovered: dns.TypeCNAME,
+			Algorithm:   0,
+			Labels:      0,
+			OrigTtl:     0,
+			Expiration:  0,
+			Inception:   0,
+			KeyTag:      0,
+			SignerName:  dns.Fqdn(domain),
+			Signature:   "abcd",
+		}
+		dnskeyAnswers = append(dnskeyAnswers, answerRRSIG)
+	}
+
+	answerDNSKEY := &dns.DNSKEY{
+		Hdr: dns.RR_Header{
+			Name:   q.Question[0].Name,
+			Rrtype: dns.TypeDNSKEY,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		Flags:     257,
+		Protocol:  3,
+		Algorithm: 8,
+		PublicKey: "abcd",
+	}
+	dnskeyAnswers = append(dnskeyAnswers, answerDNSKEY)
+
+	answerDNSKEY = &dns.DNSKEY{
+		Hdr: dns.RR_Header{
+			Name:   q.Question[0].Name,
+			Rrtype: dns.TypeDNSKEY,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		Flags:     256,
+		Protocol:  3,
+		Algorithm: 8,
+		PublicKey: "abcd",
+	}
+	dnskeyAnswers = append(dnskeyAnswers, answerDNSKEY)
+
+	answerRRSIG := &dns.RRSIG{
+		Hdr: dns.RR_Header{
+			Name:   q.Question[0].Name,
+			Rrtype: dns.TypeRRSIG,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		TypeCovered: dns.TypeDNSKEY,
+		Algorithm:   0,
+		Labels:      0,
+		OrigTtl:     0,
+		Expiration:  0,
+		Inception:   0,
+		KeyTag:      0,
+		SignerName:  dns.Fqdn(domain),
+		Signature:   "abcd",
+	}
+	dnskeyAnswers = append(dnskeyAnswers, answerRRSIG)
+
+	r.Answer = dnskeyAnswers
+	packedResponse, err := r.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ignore the first two bytes which are the query ID. The query ID changes every time.
+	return packedQuery[2:], packedResponse, r.Answer
+}
+
+func createTestARecord(t *testing.T) ([]byte, []byte) {
 	q := new(dns.Msg)
 	q.SetQuestion("example.com.", dns.TypeA)
 	packedQuery, err := q.Pack()
@@ -88,6 +242,107 @@ func createLocalResolver(t *testing.T) *localResolver {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Ignore the first two bytes which are the query ID. The query ID changes every time.
+	return packedQuery[2:], packedResponse
+}
+
+func createTestARecordDNSSEC(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
+	domain = dns.Fqdn(domain)
+	q := new(dns.Msg)
+	q.SetQuestion(domain, dns.TypeA)
+	q.SetEdns0(4096, true)
+	packedQuery, err := q.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := new(dns.Msg)
+	r.SetReply(q)
+	r.Answer = make([]dns.RR, 0)
+	answerA := &dns.A{
+		Hdr: dns.RR_Header{
+			Name:   q.Question[0].Name,
+			Rrtype: dns.TypeA,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		A: net.ParseIP("1.2.3.4"),
+	}
+	r.Answer = append(r.Answer, answerA)
+
+	answerRRSIG := &dns.RRSIG{
+		Hdr: dns.RR_Header{
+			Name:   q.Question[0].Name,
+			Rrtype: dns.TypeRRSIG,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		TypeCovered: dns.TypeA,
+		Algorithm:   0,
+		Labels:      0,
+		OrigTtl:     0,
+		Expiration:  0,
+		Inception:   0,
+		KeyTag:      0,
+		SignerName:  dns.Fqdn(domain),
+		Signature:   "abcd",
+	}
+	r.Answer = append(r.Answer, answerRRSIG)
+
+	packedResponse, err := r.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ignore the first two bytes which are the query ID. The query ID changes every time.
+	return packedQuery[2:], packedResponse, r.Answer
+}
+
+func createLocalDNSSECResolver(t *testing.T) (*localResolver, []dns.RR) {
+	queries := make([]string, 0)
+	resultMap := make(map[string][]byte)
+	allRRs := make([]dns.RR, 0)
+
+	domains := []string{
+		".",
+		"com.",
+		"bar.com.",
+		"foo.bar.com.",
+		"a.foo.bar.com.",
+		"example.com.",
+		"app.example.com.",
+	}
+
+	for _, d := range domains {
+		if d == "app.example.com." {
+			packedQuery, packedResponse, rrs := createTestARecordDNSSEC(t, d)
+			queries = append(queries, string(packedQuery))
+			resultMap[string(packedQuery)] = packedResponse
+			allRRs = append(allRRs, rrs...)
+		}
+
+		packedQuery, packedResponse, rrs := createTestDNSKEYs(t, d)
+		queries = append(queries, string(packedQuery))
+		resultMap[string(packedQuery)] = packedResponse
+		allRRs = append(allRRs, rrs...)
+
+		if d != "." {
+			packedQuery, packedResponse, rrs := createTestDS(t, d)
+			queries = append(queries, string(packedQuery))
+			resultMap[string(packedQuery)] = packedResponse
+			allRRs = append(allRRs, rrs...)
+		}
+	}
+
+	return &localResolver{
+		queries:          queries,
+		queryResponseMap: resultMap,
+	}, allRRs
+}
+
+func createLocalResolver(t *testing.T) *localResolver {
+	packedQuery, packedResponse := createTestARecord(t)
 
 	queries := make([]string, 0)
 	queries = append(queries, string(packedQuery))
@@ -236,6 +491,34 @@ func TestQueryHandlerDoHWithGET(t *testing.T) {
 	if !bytes.Equal(responseBody, r.queryResponseMap[q]) {
 		t.Fatal("Incorrect response received")
 	}
+}
+
+func rrSlicesEqual(a, b []dns.RR) (bool, error) {
+	if len(a) != len(b) {
+		return false, errors.New("slices have different lengths")
+	}
+	for i, v := range a {
+		fmt.Printf("first: %s\n", v.String())
+		fmt.Printf("second: %s\n", b[i].String())
+		if v != b[i] {
+			return false, fmt.Errorf("slices have different values at index: %d", i)
+		}
+	}
+	return true, nil
+}
+
+func TestRRFetchDNSSEC(t *testing.T) {
+	r, allRRs := createLocalDNSSECResolver(t)
+	target := createTarget(t, r)
+	rrs, err := target.fetchDnssecRecords("a.foo.bar.com", r, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if equal, err := rrSlicesEqual(rrs, allRRs); !equal {
+		t.Fatal("Incorrect DNSSEC records:", err)
+	}
+
 }
 
 func TestQueryHandlerDoHWithInvalidMethod(t *testing.T) {
