@@ -80,7 +80,7 @@ func createTestDS(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
 	dnskeyAnswers[0] = &dns.DS{
 		Hdr: dns.RR_Header{
 			Name:   q.Question[0].Name,
-			Rrtype: dns.TypeDNSKEY,
+			Rrtype: dns.TypeDS,
 			Class:  dns.ClassINET,
 			Ttl:    0,
 		},
@@ -134,7 +134,7 @@ func createTestDNSKEYs(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
 		answerCNAME := &dns.CNAME{
 			Hdr: dns.RR_Header{
 				Name:   q.Question[0].Name,
-				Rrtype: dns.TypeDNSKEY,
+				Rrtype: dns.TypeCNAME,
 				Class:  dns.ClassINET,
 				Ttl:    0,
 			},
@@ -299,10 +299,11 @@ func createTestARecordDNSSEC(t *testing.T, domain string) ([]byte, []byte, []dns
 	return packedQuery[2:], packedResponse, r.Answer
 }
 
-func createLocalDNSSECResolver(t *testing.T) (*localResolver, []dns.RR) {
+func createLocalDNSSECResolver(t *testing.T) (*localResolver, []dns.RR, []dns.RR) {
 	queries := make([]string, 0)
 	resultMap := make(map[string][]byte)
 	allRRs := make([]dns.RR, 0)
+	var answer []dns.RR
 
 	domains := []string{
 		".",
@@ -315,13 +316,6 @@ func createLocalDNSSECResolver(t *testing.T) (*localResolver, []dns.RR) {
 	}
 
 	for _, d := range domains {
-		if d == "app.example.com." {
-			packedQuery, packedResponse, rrs := createTestARecordDNSSEC(t, d)
-			queries = append(queries, string(packedQuery))
-			resultMap[string(packedQuery)] = packedResponse
-			allRRs = append(allRRs, rrs...)
-		}
-
 		packedQuery, packedResponse, rrs := createTestDNSKEYs(t, d)
 		queries = append(queries, string(packedQuery))
 		resultMap[string(packedQuery)] = packedResponse
@@ -333,12 +327,18 @@ func createLocalDNSSECResolver(t *testing.T) (*localResolver, []dns.RR) {
 			resultMap[string(packedQuery)] = packedResponse
 			allRRs = append(allRRs, rrs...)
 		}
+
+		if d == "app.example.com." {
+			packedQuery, packedResponse, answer = createTestARecordDNSSEC(t, d)
+			queries = append(queries, string(packedQuery))
+			resultMap[string(packedQuery)] = packedResponse
+		}
 	}
 
 	return &localResolver{
 		queries:          queries,
 		queryResponseMap: resultMap,
-	}, allRRs
+	}, allRRs, answer
 }
 
 func createLocalResolver(t *testing.T) *localResolver {
@@ -498,9 +498,7 @@ func rrSlicesEqual(a, b []dns.RR) (bool, error) {
 		return false, errors.New("slices have different lengths")
 	}
 	for i, v := range a {
-		fmt.Printf("first: %s\n", v.String())
-		fmt.Printf("second: %s\n", b[i].String())
-		if v != b[i] {
+		if v.String() != b[i].String() {
 			return false, fmt.Errorf("slices have different values at index: %d", i)
 		}
 	}
@@ -508,17 +506,16 @@ func rrSlicesEqual(a, b []dns.RR) (bool, error) {
 }
 
 func TestRRFetchDNSSEC(t *testing.T) {
-	r, allRRs := createLocalDNSSECResolver(t)
+	r, allRRs, answer := createLocalDNSSECResolver(t)
 	target := createTarget(t, r)
-	rrs, err := target.fetchDnssecRecords("a.foo.bar.com", r, true)
+	rrs, err := target.fetchDnssecRecords("a.foo.bar.com", answer, r)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if equal, err := rrSlicesEqual(rrs, allRRs); !equal {
+	if equal, err := rrSlicesEqual(rrs, append(allRRs, answer...)); !equal {
 		t.Fatal("Incorrect DNSSEC records:", err)
 	}
-
 }
 
 func TestQueryHandlerDoHWithInvalidMethod(t *testing.T) {

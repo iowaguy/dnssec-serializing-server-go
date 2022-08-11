@@ -117,7 +117,8 @@ func min(a, b int) int {
 	return b
 }
 
-func countPopsRequired(currentDomain, targetDomain string) (int, error) {
+// This function calculates the zone depth of the longest common suffix
+func calcNewDepth(currentDomain, targetDomain string) (int, error) {
 	for i := 0; i < 256; i++ {
 		idxCurrent, startCurrent := dns.PrevLabel(currentDomain, i)
 		idxTarget, startTarget := dns.PrevLabel(targetDomain, i)
@@ -166,12 +167,11 @@ func (s *targetServer) parseQueryFromRequest(r *http.Request) (*dns.Msg, error) 
 	}
 }
 
-func (s *targetServer) fetchSingleDnssecRecord(domainName string, r resolver, dnssec bool, qtype uint16) ([]dns.RR, error) {
+func (s *targetServer) fetchSingleDnssecRecord(domainName string, r resolver, qtype uint16) ([]dns.RR, error) {
 	dnsQuery := new(dns.Msg)
 	dnsQuery.SetQuestion(dns.Fqdn(domainName), qtype)
-	if dnssec {
-		dnsQuery.SetEdns0(4096, true)
-	}
+	dnsQuery.SetEdns0(4096, true)
+
 	packedDnsQuery, err := dnsQuery.Pack()
 	if err != nil {
 		log.Println("Failed encoding DNS query:", err)
@@ -203,12 +203,12 @@ func (s *targetServer) fetchSingleDnssecRecord(domainName string, r resolver, dn
 	return response.Answer, err
 }
 
-func (s *targetServer) fetchDnskeyRecord(domainName string, r resolver, dnssec bool) ([]dns.RR, error) {
-	return s.fetchSingleDnssecRecord(domainName, r, dnssec, dns.TypeDNSKEY)
+func (s *targetServer) fetchDnskeyRecord(domainName string, r resolver) ([]dns.RR, error) {
+	return s.fetchSingleDnssecRecord(domainName, r, dns.TypeDNSKEY)
 }
 
-func (s *targetServer) fetchDsRecord(domainName string, r resolver, dnssec bool) ([]dns.RR, error) {
-	return s.fetchSingleDnssecRecord(domainName, r, dnssec, dns.TypeDS)
+func (s *targetServer) fetchDsRecord(domainName string, r resolver) ([]dns.RR, error) {
+	return s.fetchSingleDnssecRecord(domainName, r, dns.TypeDS)
 }
 
 func containsCNAME(rrs []dns.RR) (*dns.CNAME, bool) {
@@ -221,45 +221,19 @@ func containsCNAME(rrs []dns.RR) (*dns.CNAME, bool) {
 	return nil, false
 }
 
-func (s *targetServer) fetchDnssecRecords(targetDomain string, r resolver, dnssec bool) ([]dns.RR, error) {
+func (s *targetServer) fetchDnssecRecords(targetDomain string, answer []dns.RR, r resolver) ([]dns.RR, error) {
 	// Initialize empty stack
 	stack := make(zoneStack, 0)
 	zones := append(dns.SplitDomainName(targetDomain), "")
 
 	// 2) Iterate down zone hierarchy starting at root
 	for i := len(zones) - 1; i >= 0; i-- {
-	start:
 		currentZone := dns.Fqdn(strings.Join(zones[i:], "."))
 
 		// Request DNSKEYs and RRSIG DNSKEYs for the current zone
-		dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r, dnssec)
+		dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
 		if err != nil {
 			return nil, err
-		}
-
-		// If r contains a CNAME, replace the target with the one referenced in the
-		// CNAME. Then pop RRs off the stack for each zone until the new target is
-		// within the current zone. Jump to the top of the loop for this subdomain
-		// (e.g., if the target zone was "foo.example.com", then it should now be
-		// "a.b.c.foo.bar.com").
-		if cname, isCNAME := containsCNAME(dnskeyRRs); isCNAME {
-			targetDomain = cname.Target
-			zones = append(dns.SplitDomainName(targetDomain), "")
-
-			// TODO START HERE, step through with debugger (see examples in scratch buffer)
-			pops, err := countPopsRequired(currentZone, targetDomain)
-			if err != nil {
-				return nil, err
-			}
-
-			i += pops
-			for j := 0; j < pops; j++ {
-				stack, _ = stack.pop()
-			}
-
-			currentZone = dns.Fqdn(strings.Join(zones[i:], "."))
-
-			goto start
 		}
 
 		zone := zoneData{
@@ -270,7 +244,7 @@ func (s *targetServer) fetchDnssecRecords(targetDomain string, r resolver, dnsse
 
 		// If current zone != ".", request DS and RRSIG DS for current zone.
 		if currentZone != "." {
-			dsRRs, err := s.fetchDsRecord(currentZone, r, dnssec)
+			dsRRs, err := s.fetchDsRecord(currentZone, r)
 			if err != nil {
 				return nil, err
 			}
@@ -278,6 +252,43 @@ func (s *targetServer) fetchDnssecRecords(targetDomain string, r resolver, dnsse
 		}
 		stack = stack.push(zone)
 
+		// If r contains a CNAME, replace the target with the one referenced in the
+		// CNAME. Then return up the stack for each zone until the new target is
+		// within the current zone.
+		if cname, isCNAME := containsCNAME(dnskeyRRs); isCNAME {
+			targetDomain = cname.Target
+			newDepth, err := calcNewDepth(currentZone, targetDomain)
+			if err != nil {
+				return nil, err
+			}
+
+			zones = append(dns.SplitDomainName(targetDomain), "")
+			for j := newDepth - 1; j >= 0; j-- {
+				currentZone := dns.Fqdn(strings.Join(zones[j:], "."))
+
+				// Request DNSKEYs and RRSIG DNSKEYs for the current zone
+				dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
+				if err != nil {
+					return nil, err
+				}
+
+				zone := zoneData{
+					zoneName: currentZone,
+				}
+
+				zone.dnskeyRRs = append(zone.dnskeyRRs, dnskeyRRs...)
+
+				dsRRs, err := s.fetchDsRecord(currentZone, r)
+				if err != nil {
+					return nil, err
+				}
+				zone.dsRRs = append(zone.dsRRs, dsRRs...)
+
+				stack = stack.push(zone)
+			}
+
+			return append(stack.collect(), answer...), nil
+		}
 	}
 	//    4) If r contains a DNAME, replace target suffix (which should equal the
 	//       current zone) with the one referenced in the
@@ -305,7 +316,7 @@ func (s *targetServer) fetchDnssecRecords(targetDomain string, r resolver, dnsse
 	// (if this domain == target domain)
 	// TXT
 	// RRSIG TXT
-	return stack.collect(), nil
+	return append(stack.collect(), answer...), nil
 }
 
 func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
@@ -334,7 +345,14 @@ func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte,
 		log.Printf("Answer=%s elapsed=%s\n", packedResponse, elapsed.String())
 	}
 
-	// _, err = s.fetchDnssecRecords(q.Question[0].Name, r, q.IsEdns0().Do())
+	if q.IsEdns0().Do() {
+		allDNSSECRecords, err := s.fetchDnssecRecords(q.Question[0].Name, response.Answer, r)
+		if err != nil {
+			log.Println("Failed retrieving DNSSEC proofs:", err)
+			return nil, err
+		}
+		allDNSSECRecords = append(allDNSSECRecords, response.Answer...)
+	}
 
 	return packedResponse, err
 }
