@@ -54,7 +54,9 @@ func (r localResolver) resolve(query *dns.Msg) (*dns.Msg, error) {
 	}
 
 	// Ignore the first two bytes which are the query ID. The query ID changes every time.
-	packed, ok := r.queryResponseMap[string(packedQuery[2:])]
+	packedQuery[0] = 0
+	packedQuery[1] = 0
+	packed, ok := r.queryResponseMap[string(packedQuery)]
 	if !ok {
 		return nil, errors.New("Failed to resolve")
 	}
@@ -114,7 +116,9 @@ func createTestDS(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
 	}
 
 	// Ignore the first two bytes which are the query ID. The query ID changes every time.
-	return packedQuery[2:], packedResponse, r.Answer
+	packedQuery[0] = 0
+	packedQuery[1] = 0
+	return packedQuery, packedResponse, r.Answer
 }
 
 func createTestDNSKEYs(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
@@ -215,7 +219,9 @@ func createTestDNSKEYs(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
 	}
 
 	// Ignore the first two bytes which are the query ID. The query ID changes every time.
-	return packedQuery[2:], packedResponse, r.Answer
+	packedQuery[0] = 0
+	packedQuery[1] = 0
+	return packedQuery, packedResponse, r.Answer
 }
 
 func createTestARecord(t *testing.T) ([]byte, []byte) {
@@ -244,7 +250,9 @@ func createTestARecord(t *testing.T) ([]byte, []byte) {
 	}
 
 	// Ignore the first two bytes which are the query ID. The query ID changes every time.
-	return packedQuery[2:], packedResponse
+	packedQuery[0] = 0
+	packedQuery[1] = 0
+	return packedQuery, packedResponse
 }
 
 func createTestARecordDNSSEC(t *testing.T, domain string) ([]byte, []byte, []dns.RR) {
@@ -296,7 +304,9 @@ func createTestARecordDNSSEC(t *testing.T, domain string) ([]byte, []byte, []dns
 	}
 
 	// Ignore the first two bytes which are the query ID. The query ID changes every time.
-	return packedQuery[2:], packedResponse, r.Answer
+	packedQuery[0] = 0
+	packedQuery[1] = 0
+	return packedQuery, packedResponse, r.Answer
 }
 
 func createLocalDNSSECResolver(t *testing.T) (*localResolver, []dns.RR, []dns.RR) {
@@ -342,7 +352,7 @@ func createLocalDNSSECResolver(t *testing.T) (*localResolver, []dns.RR, []dns.RR
 }
 
 func createLocalResolver(t *testing.T) *localResolver {
-	packedQuery, packedResponse := createTestARecord(t)
+	packedQuery, packedResponse, _ := createTestARecordDNSSEC(t, "example.com")
 
 	queries := make([]string, 0)
 	queries = append(queries, string(packedQuery))
