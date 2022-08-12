@@ -221,102 +221,150 @@ func containsCNAME(rrs []dns.RR) (*dns.CNAME, bool) {
 	return nil, false
 }
 
-func (s *targetServer) fetchDnssecRecords(targetDomain string, answer []dns.RR, r resolver) ([]dns.RR, error) {
-	// Initialize empty stack
-	stack := make(zoneStack, 0)
-	zones := append(dns.SplitDomainName(targetDomain), "")
+func (s *targetServer) getZoneRRs(targetDomain []string, depth int, r resolver) ([]dns.RR, error) {
+	if depth == -1 {
+		return make([]dns.RR, 0), nil
+	}
+	currentZone := dns.Fqdn(strings.Join(targetDomain[depth:], "."))
 
-	// 2) Iterate down zone hierarchy starting at root
-	for i := len(zones) - 1; i >= 0; i-- {
-		currentZone := dns.Fqdn(strings.Join(zones[i:], "."))
+	dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
+	if err != nil {
+		return nil, err
+	}
 
-		// Request DNSKEYs and RRSIG DNSKEYs for the current zone
-		dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
+	var dsRRs []dns.RR
+	if currentZone != "." {
+		dsRRs, err = s.fetchDsRecord(currentZone, r)
 		if err != nil {
 			return nil, err
 		}
 
-		zone := zoneData{
-			zoneName: currentZone,
-		}
-
-		zone.dnskeyRRs = append(zone.dnskeyRRs, dnskeyRRs...)
-
-		// If current zone != ".", request DS and RRSIG DS for current zone.
-		if currentZone != "." {
-			dsRRs, err := s.fetchDsRecord(currentZone, r)
-			if err != nil {
-				return nil, err
-			}
-			zone.dsRRs = append(zone.dsRRs, dsRRs...)
-		}
-		stack = stack.push(zone)
-
-		// If r contains a CNAME, replace the target with the one referenced in the
-		// CNAME. Then return up the stack for each zone until the new target is
-		// within the current zone.
-		if cname, isCNAME := containsCNAME(dnskeyRRs); isCNAME {
-			targetDomain = cname.Target
-			newDepth, err := calcNewDepth(currentZone, targetDomain)
-			if err != nil {
-				return nil, err
-			}
-
-			zones = append(dns.SplitDomainName(targetDomain), "")
-			for j := newDepth - 1; j >= 0; j-- {
-				currentZone := dns.Fqdn(strings.Join(zones[j:], "."))
-
-				// Request DNSKEYs and RRSIG DNSKEYs for the current zone
-				dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
-				if err != nil {
-					return nil, err
-				}
-
-				zone := zoneData{
-					zoneName: currentZone,
-				}
-
-				zone.dnskeyRRs = append(zone.dnskeyRRs, dnskeyRRs...)
-
-				dsRRs, err := s.fetchDsRecord(currentZone, r)
-				if err != nil {
-					return nil, err
-				}
-				zone.dsRRs = append(zone.dsRRs, dsRRs...)
-
-				stack = stack.push(zone)
-			}
-
-			return append(stack.collect(), answer...), nil
-		}
 	}
-	//    4) If r contains a DNAME, replace target suffix (which should equal the
-	//       current zone) with the one referenced in the
-	//       DNAME and replace current zone with the one referenced in the
-	//       DNAME. Then pop RRs off the stack for each zone until the new target is
-	//       within the current zone. Jump to the top of the loop for this subdomain
-	//       (e.g., if the current zone was "foo.example.com", then it should now be
-	//       "foo.bar.com").
 
-	// query for:
-	// - root zone "."
+	zs, err := s.getZoneRRs(targetDomain, depth-1, r)
+	if err != nil {
+		return nil, err
+	}
 
-	// DNSKEY ksk # confirm that this matches hardcoded public key
-	// DNSKEY zsk
-	// RRSIG DNSKEY
+	return append(append(dnskeyRRs, dsRRs...), zs...), nil
+}
 
-	// - next zone repeat until this domain == target domain
-	// DNSKEY ksk # confirm that this matches hardcoded public key
-	// DNSKEY zsk
-	// RRSIG DNSKEY
+// func (s *targetServer) getZoneRecords(currentZone string, r resolver) ([]dns.RR, error) {
+// 	currentZone = dns.Fqdn(currentZone)
 
-	// DS
-	// RRSIG DS
+// 	// zone := zoneData{
+// 	// 	zoneName: currentZone,
+// 	// }
 
-	// (if this domain == target domain)
-	// TXT
-	// RRSIG TXT
-	return append(stack.collect(), answer...), nil
+// 	// Request DNSKEYs and RRSIG DNSKEYs for the current zone
+// 	dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	// zone.dnskeyRRs = append(zone.dnskeyRRs, dnskeyRRs...)
+
+// 	// If current zone != ".", request DS and RRSIG DS for current zone.
+// 	var dsRRs []dns.RR
+// 	if currentZone != "." {
+// 		dsRRs, err = s.fetchDsRecord(currentZone, r)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		// zone.dsRRs = append(zone.dsRRs, dsRRs...)
+// 	}
+
+// 	return append(dnskeyRRs, dsRRs...), nil
+// }
+
+func (s *targetServer) fetchDnssecRecords(targetDomain string, answer []dns.RR, r resolver) ([]dns.RR, error) {
+	// Initialize empty stack
+	// stack := make(zoneStack, 0)
+	zones := append(dns.SplitDomainName(targetDomain), "")
+
+	rrs, err := s.getZoneRRs(zones, len(zones)-1, r)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(rrs, answer...), nil
+
+	// 2) Iterate down zone hierarchy starting at root
+	// for i := len(zones) - 1; i >= 0; i-- {
+	// 	currentZone := dns.Fqdn(strings.Join(zones[i:], "."))
+
+	// 	zone, err := s.getZoneRecords(currentZone, r)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+
+	// 	stack = stack.push(zone)
+
+	// 	// If r contains a CNAME, replace the target with the one referenced in the
+	// 	// CNAME. Then return up the stack for each zone until the new target is
+	// 	// within the current zone.
+	// 	if cname, isCNAME := containsCNAME(zone.dnskeyRRs); isCNAME {
+	// 		targetDomain = cname.Target
+	// 		newDepth, err := calcNewDepth(currentZone, targetDomain)
+	// 		if err != nil {
+	// 			return nil, err
+	// 		}
+
+	// 		zones = append(dns.SplitDomainName(targetDomain), "")
+	// 		for j := newDepth - 1; j >= 0; j-- {
+	// 			currentZone := dns.Fqdn(strings.Join(zones[j:], "."))
+
+	// 			// Request DNSKEYs and RRSIG DNSKEYs for the current zone
+	// 			dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
+	// 			if err != nil {
+	// 				return nil, err
+	// 			}
+
+	// 			zone := zoneData{
+	// 				zoneName: currentZone,
+	// 			}
+
+	// 			zone.dnskeyRRs = append(zone.dnskeyRRs, dnskeyRRs...)
+
+	// 			dsRRs, err := s.fetchDsRecord(currentZone, r)
+	// 			if err != nil {
+	// 				return nil, err
+	// 			}
+	// 			zone.dsRRs = append(zone.dsRRs, dsRRs...)
+
+	// 			stack = stack.push(zone)
+	// 		}
+
+	// 		return append(stack.collect(), answer...), nil
+	// 	}
+
+	// // If r contains a DNAME, replace target suffix (which should equal the
+	// // current zone) with the one referenced in the
+	// // DNAME and replace current zone with the one referenced in the
+	// // DNAME. Then pop RRs off the stack for each zone until the new target is
+	// // within the current zone. Jump to the top of the loop for this subdomain
+
+
+	// }
+
+	// // query for:
+	// // - root zone "."
+
+	// // DNSKEY ksk # confirm that this matches hardcoded public key
+	// // DNSKEY zsk
+	// // RRSIG DNSKEY
+
+	// // - next zone repeat until this domain == target domain
+	// // DNSKEY ksk # confirm that this matches hardcoded public key
+	// // DNSKEY zsk
+	// // RRSIG DNSKEY
+
+	// // DS
+	// // RRSIG DS
+
+	// // (if this domain == target domain)
+	// // TXT
+	// // RRSIG TXT
+	// return append(stack.collect(), answer...), nil
 }
 
 func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
@@ -345,14 +393,18 @@ func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte,
 		log.Printf("Answer=%s elapsed=%s\n", packedResponse, elapsed.String())
 	}
 
+	log.Println("BENW tet")
 	if q.IsEdns0().Do() {
 		allDNSSECRecords, err := s.fetchDnssecRecords(q.Question[0].Name, response.Answer, r)
 		if err != nil {
 			log.Println("Failed retrieving DNSSEC proofs:", err)
 			return nil, err
 		}
-		allDNSSECRecords = append(allDNSSECRecords, response.Answer...)
+		for _, v := range allDNSSECRecords {
+			log.Println(v.String())
+		}
 	}
+
 
 	return packedResponse, err
 }
