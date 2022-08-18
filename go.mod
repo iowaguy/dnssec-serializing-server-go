@@ -12,4 +12,4 @@ require (
 	github.com/miekg/dns v1.1.50
 )
 
-replace github.com/miekg/dns v1.1.50 => github.com/iowaguy/dns v1.1.50
+replace github.com/miekg/dns v1.1.50 => github.com/iowaguy/dns v1.1.50-serial.3

@@ -367,6 +367,191 @@ func (s *targetServer) fetchDnssecRecords(targetDomain string, answer []dns.RR, 
 	// return append(stack.collect(), answer...), nil
 }
 
+// Check if the provided key is a key-signing key
+func checkIfKSK(key *dns.DNSKEY) bool {
+	// is zone key
+	isKey := 0 != key.Flags & dns.ZONE
+
+	// is Secure Entry Point
+	isSEP := 0 != key.Flags & dns.SEP
+
+	return isKey && isSEP
+}
+
+func convertDnskeyToKey(dnskey *dns.DNSKEY) dns.Key {
+	k := dns.Key{
+		Flags: dnskey.Flags,
+		Protocol: dnskey.Protocol,
+		Algorithm: dnskey.Algorithm,
+		Public_key: []byte(dnskey.PublicKey),
+	}
+	k.Length = uint16(dns.Len(&k))
+	return k
+}
+
+func convertDsToSerialDs(ds *dns.DS) dns.SerialDS {
+	s := dns.SerialDS{
+		Key_tag: ds.KeyTag,
+		Algorithm: ds.Algorithm,
+		Digest_type: ds.DigestType,
+		Digest: []byte(ds.Digest),
+	}
+	s.Digest_len = uint16(len(s.Digest))
+	s.Length = uint16(dns.Len(&s))
+	return s
+}
+
+func convertRrsigToSignature(rrsig *dns.RRSIG) dns.Signature {
+	s := dns.Signature{
+		Algorithm: rrsig.Algorithm,
+		Labels: rrsig.Labels,
+		Ttl: rrsig.OrigTtl,
+		Expires: rrsig.Expiration,
+		Begins: rrsig.Inception,
+		Key_tag: rrsig.KeyTag,
+		Signature: []byte(rrsig.Signature),
+	}
+	s.Length = uint16(dns.Len(&s))
+	return s
+}
+
+
+// The input resource records are already in canonical order
+func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
+	zones := make([]dns.ZonePair, 0)
+	zoneName := ""
+	currentEntry := &dns.Entering{
+		ZType: dns.EnteringType,
+		Keys: make([]dns.Key, 0),
+	}
+	currentExit := &dns.Leaving{
+		ZType: dns.LeavingType,
+		LeavingType: dns.LeavingUncommitted,
+	}
+
+	for _, v := range rrs {
+		// set the zone name for the first zone we're traversing
+		if zoneName == "" {
+			zoneName = v.Header().Name
+		}
+
+		// check if this record is part of a new zone
+		if v.Header().Name != zoneName {
+			zoneName = v.Header().Name
+
+			// populate the remaining fields from the previous zone
+			currentEntry.Num_keys = uint8(len(currentEntry.Keys))
+			currentEntry.Length = uint16(dns.Len(currentEntry))
+			currentExit.Next_name = dns.Name(v.Header().Name)
+			currentExit.Length = uint16(dns.Len(currentExit))
+
+			// append previous zone's entries to struct
+			zp := dns.ZonePair{
+				Entry: *currentEntry,
+				Exit: *currentExit,
+			}
+			zones = append(zones, zp)
+
+			// create new entry and exit for the new current zone
+			currentEntry = &dns.Entering{
+				ZType: dns.EnteringType,
+				Keys: make([]dns.Key, 0),
+			}
+			currentExit = &dns.Leaving{
+				ZType: dns.LeavingType,
+				LeavingType: dns.LeavingUncommitted,
+			}
+		}
+
+		// still reading records from the same zone
+		switch t := v.(type) {
+		case *dns.DNSKEY:
+			if checkIfKSK(t) {
+				currentEntry.Entry_key_index = uint8(len(currentEntry.Keys))
+			}
+
+			key := convertDnskeyToKey(t)
+			currentEntry.Keys = append(currentEntry.Keys, key)
+		case *dns.DS:
+			ds := convertDsToSerialDs(t)
+
+			if len(zones) == 0 {
+				return dns.DNSSECProof{}, errors.New("Root zone cannot have a DS record")
+			}
+
+			if l := zones[len(zones)-1].Exit; l.LeavingType == dns.LeavingUncommitted {
+				l.LeavingType = dns.LeavingDSType
+				l.Ds_records = make([]dns.SerialDS, 0)
+				l.Ds_records = append(l.Ds_records, ds)
+				l.Num_ds = uint8(len(l.Ds_records))
+				zones[len(zones)-1].Exit = l
+			} else if l.LeavingType == dns.LeavingDSType {
+				l.Ds_records = append(l.Ds_records, ds)
+				l.Num_ds = uint8(len(l.Ds_records))
+				zones[len(zones)-1].Exit = l
+			} else {
+				return dns.DNSSECProof{}, errors.New("Exit struct already has non-DS type")
+			}
+
+			// update the struct length after modifications
+			zones[len(zones)-1].Exit.Length = uint16(dns.Len(&zones[len(zones)-1].Exit))
+		case *dns.RRSIG:
+			switch t.TypeCovered {
+			case dns.TypeDNSKEY:
+				currentEntry.Key_sig = convertRrsigToSignature(t)
+			case dns.TypeDS:
+				if len(zones) == 0 {
+					return dns.DNSSECProof{}, errors.New("Root zone cannot have a DS record")
+				}
+
+				if zones[len(zones)-1].Exit.LeavingType == dns.LeavingUncommitted {
+					return dns.DNSSECProof{}, errors.New("Should have seen a DS record before this signature")
+				} else if zones[len(zones)-1].Exit.LeavingType == dns.LeavingDSType {
+					zones[len(zones)-1].Exit.Rrsig = convertRrsigToSignature(t)
+				} else {
+					return dns.DNSSECProof{}, errors.New("Exit struct already has non-DS type")
+				}
+
+				// update the struct length after modifications
+				zones[len(zones)-1].Exit.Length = uint16(dns.Len(&zones[len(zones)-1].Exit))
+			}
+
+		case *dns.CNAME:
+			return dns.DNSSECProof{}, errors.New("CNAME is not supported")
+		case *dns.DNAME:
+			return dns.DNSSECProof{}, errors.New("DNAME is not supported")
+		case *dns.A:
+		case *dns.AAAA:
+		default:
+			return dns.DNSSECProof{}, errors.New("Type " + t.String() + " is not supported")
+		}
+
+		log.Println(v.String())
+	}
+
+	// populate the remaining fields from the previous zone
+	currentEntry.Length = uint16(dns.Len(currentEntry))
+	currentEntry.Num_keys = uint8(len(currentEntry.Keys))
+	currentExit.Length = uint16(dns.Len(currentExit))
+
+	// append previous zone's entries to struct
+	zp := dns.ZonePair{
+		Entry: *currentEntry,
+		Exit: *currentExit,
+	}
+	zones = append(zones, zp)
+
+	return dns.DNSSECProof{
+		Hdr: dns.RR_Header{
+			Rrtype: dns.TypeDNSSECProof,
+		},
+		// NOTE zero indicates that we're using the root zone's key-signing key
+		Initial_key_tag: 0,
+		Num_zones: uint8(len(zones)),
+		Zones: zones,
+	}, nil
+}
+
 func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
 
 	packedQuery, err := q.Pack()
@@ -383,6 +568,22 @@ func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte,
 	response, err := r.resolve(q)
 	elapsed := time.Since(start)
 
+	var dnssecProof dns.DNSSECProof
+	if q.IsEdns0().Do() {
+		allDNSSECRecords, err := s.fetchDnssecRecords(q.Question[0].Name, response.Answer, r)
+		if err != nil {
+			log.Println("Failed retrieving DNSSEC proofs:", err)
+			return nil, err
+		}
+		dnssecProof, err = makeRRsTraversable(allDNSSECRecords)
+		if err != nil {
+			log.Println("Failed serializing DNSSEC proofs:", err)
+			return nil, err
+		}
+
+		response.Extra = append(response.Extra, &dnssecProof)
+	}
+
 	packedResponse, err := response.Pack()
 	if err != nil {
 		log.Println("Failed encoding DNS response:", err)
@@ -392,19 +593,6 @@ func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte,
 	if s.verbose {
 		log.Printf("Answer=%s elapsed=%s\n", packedResponse, elapsed.String())
 	}
-
-	log.Println("BENW tet")
-	if q.IsEdns0().Do() {
-		allDNSSECRecords, err := s.fetchDnssecRecords(q.Question[0].Name, response.Answer, r)
-		if err != nil {
-			log.Println("Failed retrieving DNSSEC proofs:", err)
-			return nil, err
-		}
-		for _, v := range allDNSSECRecords {
-			log.Println(v.String())
-		}
-	}
-
 
 	return packedResponse, err
 }
