@@ -415,7 +415,6 @@ func convertRrsigToSignature(rrsig *dns.RRSIG) dns.Signature {
 	return s
 }
 
-
 // The input resource records are already in canonical order
 func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 	zones := make([]dns.ZonePair, 0)
@@ -520,13 +519,15 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 			return dns.DNSSECProof{}, errors.New("CNAME is not supported")
 		case *dns.DNAME:
 			return dns.DNSSECProof{}, errors.New("DNAME is not supported")
+		case *dns.TXT:
+			addLeafRR(currentExit, v)
 		case *dns.A:
+			addLeafRR(currentExit, v)
 		case *dns.AAAA:
+			addLeafRR(currentExit, v)
 		default:
 			return dns.DNSSECProof{}, errors.New("Type " + t.String() + " is not supported")
 		}
-
-		log.Println(v.String())
 	}
 
 	// populate the remaining fields from the previous zone
@@ -550,6 +551,16 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 		Num_zones: uint8(len(zones)),
 		Zones: zones,
 	}, nil
+}
+
+func addLeafRR(exit *dns.Leaving, rr dns.RR) {
+	exit.LeavingType = dns.LeavingOtherType
+
+	if exit.Rrs == nil {
+		exit.Rrs = make([]dns.RR, 0)
+	}
+	exit.Rrs = append(exit.Rrs, rr)
+	exit.Num_rrs = uint8(len(exit.Rrs))
 }
 
 func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
