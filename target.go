@@ -533,7 +533,13 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 	// populate the remaining fields from the previous zone
 	currentEntry.Length = uint16(dns.Len(currentEntry))
 	currentEntry.Num_keys = uint8(len(currentEntry.Keys))
+
+	// the final exit won't contain any data, just need to
+	// do some record keeping
+	currentExit.Rrsig = dns.Signature{}
+	currentExit.Rrsig.Length = uint16(dns.Len(&currentExit.Rrsig))
 	currentExit.Length = uint16(dns.Len(currentExit))
+	currentExit.Next_name = dns.Name(zoneName)
 
 	// append previous zone's entries to struct
 	zp := dns.ZonePair{
