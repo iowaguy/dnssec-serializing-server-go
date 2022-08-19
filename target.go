@@ -544,6 +544,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 
 	return dns.DNSSECProof{
 		Hdr: dns.RR_Header{
+			Name: zoneName,
 			Rrtype: dns.TypeDNSSECProof,
 		},
 		// NOTE zero indicates that we're using the root zone's key-signing key
