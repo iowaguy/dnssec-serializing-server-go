@@ -407,7 +407,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 				zones[len(zones)-1].Exit.Length = uint16(dns.Len(&zones[len(zones)-1].Exit))
 			default:
 				fmt.Printf("%v\n", t)
-				zones[len(zones)-1].Exit.Rrsig = convertRrsigToSignature(t)
+				currentExit.Rrsig = convertRrsigToSignature(t)
 			}
 
 		case *dns.CNAME:
@@ -431,7 +431,6 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 
 	// the final exit won't contain any data, just need to
 	// do some record keeping
-	currentExit.Rrsig = dns.Signature{}
 	currentExit.Rrsig.Length = uint16(dns.Len(&currentExit.Rrsig))
 	currentExit.Length = uint16(dns.Len(currentExit))
 	currentExit.Next_name = dns.Name(zoneName)
