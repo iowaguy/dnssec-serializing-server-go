@@ -78,16 +78,10 @@ type odohServer struct {
 
 func (s odohServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	fmt.Fprint(w, "ODOH service\n")
+	fmt.Fprint(w, "DNSSEC Serialization Resolver\n")
 	fmt.Fprint(w, "----------------\n")
-	fmt.Fprintf(w, "Proxy endpoint: https://%s%s{?targethost,targetpath}\n", r.Host, s.endpoints["Proxy"])
-	fmt.Fprintf(w, "Target endpoint: https://%s%s{?dns}\n", r.Host, s.endpoints["Target"])
+	fmt.Fprintf(w, "Endpoint: https://%s%s{?dns}\n", r.Host, s.endpoints["Target"])
 	fmt.Fprint(w, "----------------\n")
-}
-
-func (s odohServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	fmt.Fprint(w, "ok")
 }
 
 func main() {
@@ -185,9 +179,7 @@ func main() {
 		DOHURI:    fmt.Sprintf("%s/%s", targetURI, queryEndpoint),
 	}
 
-	http.HandleFunc(proxyEndpoint, server.proxy.proxyQueryHandler)
 	http.HandleFunc(queryEndpoint, server.target.targetQueryHandler)
-	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
 

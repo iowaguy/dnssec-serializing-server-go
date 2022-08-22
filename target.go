@@ -343,7 +343,6 @@ func (s *targetServer) fetchDnssecRecords(targetDomain string, answer []dns.RR, 
 	// // DNAME. Then pop RRs off the stack for each zone until the new target is
 	// // within the current zone. Jump to the top of the loop for this subdomain
 
-
 	// }
 
 	// // query for:
@@ -370,19 +369,19 @@ func (s *targetServer) fetchDnssecRecords(targetDomain string, answer []dns.RR, 
 // Check if the provided key is a key-signing key
 func checkIfKSK(key *dns.DNSKEY) bool {
 	// is zone key
-	isKey := 0 != key.Flags & dns.ZONE
+	isKey := 0 != key.Flags&dns.ZONE
 
 	// is Secure Entry Point
-	isSEP := 0 != key.Flags & dns.SEP
+	isSEP := 0 != key.Flags&dns.SEP
 
 	return isKey && isSEP
 }
 
 func convertDnskeyToKey(dnskey *dns.DNSKEY) dns.Key {
 	k := dns.Key{
-		Flags: dnskey.Flags,
-		Protocol: dnskey.Protocol,
-		Algorithm: dnskey.Algorithm,
+		Flags:      dnskey.Flags,
+		Protocol:   dnskey.Protocol,
+		Algorithm:  dnskey.Algorithm,
 		Public_key: []byte(dnskey.PublicKey),
 	}
 	k.Length = uint16(dns.Len(&k))
@@ -391,10 +390,10 @@ func convertDnskeyToKey(dnskey *dns.DNSKEY) dns.Key {
 
 func convertDsToSerialDs(ds *dns.DS) dns.SerialDS {
 	s := dns.SerialDS{
-		Key_tag: ds.KeyTag,
-		Algorithm: ds.Algorithm,
+		Key_tag:     ds.KeyTag,
+		Algorithm:   ds.Algorithm,
 		Digest_type: ds.DigestType,
-		Digest: []byte(ds.Digest),
+		Digest:      []byte(ds.Digest),
 	}
 	s.Digest_len = uint16(len(s.Digest))
 	s.Length = uint16(dns.Len(&s))
@@ -404,11 +403,11 @@ func convertDsToSerialDs(ds *dns.DS) dns.SerialDS {
 func convertRrsigToSignature(rrsig *dns.RRSIG) dns.Signature {
 	s := dns.Signature{
 		Algorithm: rrsig.Algorithm,
-		Labels: rrsig.Labels,
-		Ttl: rrsig.OrigTtl,
-		Expires: rrsig.Expiration,
-		Begins: rrsig.Inception,
-		Key_tag: rrsig.KeyTag,
+		Labels:    rrsig.Labels,
+		Ttl:       rrsig.OrigTtl,
+		Expires:   rrsig.Expiration,
+		Begins:    rrsig.Inception,
+		Key_tag:   rrsig.KeyTag,
 		Signature: []byte(rrsig.Signature),
 	}
 	s.Length = uint16(dns.Len(&s))
@@ -421,10 +420,10 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 	zoneName := ""
 	currentEntry := &dns.Entering{
 		ZType: dns.EnteringType,
-		Keys: make([]dns.Key, 0),
+		Keys:  make([]dns.Key, 0),
 	}
 	currentExit := &dns.Leaving{
-		ZType: dns.LeavingType,
+		ZType:       dns.LeavingType,
 		LeavingType: dns.LeavingUncommitted,
 	}
 
@@ -447,17 +446,17 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 			// append previous zone's entries to struct
 			zp := dns.ZonePair{
 				Entry: *currentEntry,
-				Exit: *currentExit,
+				Exit:  *currentExit,
 			}
 			zones = append(zones, zp)
 
 			// create new entry and exit for the new current zone
 			currentEntry = &dns.Entering{
 				ZType: dns.EnteringType,
-				Keys: make([]dns.Key, 0),
+				Keys:  make([]dns.Key, 0),
 			}
 			currentExit = &dns.Leaving{
-				ZType: dns.LeavingType,
+				ZType:       dns.LeavingType,
 				LeavingType: dns.LeavingUncommitted,
 			}
 		}
@@ -513,6 +512,9 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 
 				// update the struct length after modifications
 				zones[len(zones)-1].Exit.Length = uint16(dns.Len(&zones[len(zones)-1].Exit))
+			default:
+				fmt.Printf("%v\n", t)
+				zones[len(zones)-1].Exit.Rrsig = convertRrsigToSignature(t)
 			}
 
 		case *dns.CNAME:
@@ -544,19 +546,19 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 	// append previous zone's entries to struct
 	zp := dns.ZonePair{
 		Entry: *currentEntry,
-		Exit: *currentExit,
+		Exit:  *currentExit,
 	}
 	zones = append(zones, zp)
 
 	return dns.DNSSECProof{
 		Hdr: dns.RR_Header{
-			Name: zoneName,
+			Name:   zoneName,
 			Rrtype: dns.TypeDNSSECProof,
 		},
 		// NOTE zero indicates that we're using the root zone's key-signing key
 		Initial_key_tag: 0,
-		Num_zones: uint8(len(zones)),
-		Zones: zones,
+		Num_zones:       uint8(len(zones)),
+		Zones:           zones,
 	}, nil
 }
 
@@ -685,101 +687,14 @@ func (s *targetServer) createObliviousResponseForQuery(context odoh.ResponseCont
 	return odohResponse, err
 }
 
-func (s *targetServer) odohQueryHandler(w http.ResponseWriter, r *http.Request) {
-	requestReceivedTime := time.Now()
-	exp := experiment{}
-	exp.ExperimentID = s.experimentId
-	exp.IngestedFrom = s.serverInstanceName
-	exp.ProtocolType = "ODOH"
-	timestamp := runningTime{}
-
-	timestamp.Start = requestReceivedTime.UnixNano()
-	odohMessage, err := s.parseObliviousQueryFromRequest(r)
-	if err != nil {
-		log.Println("parseObliviousQueryFromRequest failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	obliviousQuery, responseContext, err := s.odohKeyPair.DecryptQuery(odohMessage)
-	if err != nil {
-		log.Println("DecryptQuery failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	query, err := decodeDNSQuestion(obliviousQuery.Message())
-	if err != nil {
-		log.Println("decodeDNSQuestion failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	queryParseAndDecryptionCompleteTime := time.Now().UnixNano()
-	timestamp.TargetQueryDecryptionTime = queryParseAndDecryptionCompleteTime
-
-	chosenResolver := rand.Intn(len(s.resolver))
-	packedResponse, err := s.resolveQueryWithResolver(query, s.resolver[chosenResolver])
-	if err != nil {
-		log.Println("resolveQueryWithResolver failed:", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	queryResolutionCompleteTime := time.Now().UnixNano()
-	timestamp.TargetQueryResolutionTime = queryResolutionCompleteTime
-
-	obliviousResponse, err := s.createObliviousResponseForQuery(responseContext, packedResponse)
-	if err != nil {
-		log.Println("createObliviousResponseForQuery failed:", err)
-		timestamp.TargetAnswerEncryptionTime = 0
-		timestamp.EndTime = 0
-		exp.Timestamp = timestamp
-		exp.Status = false
-		exp.Resolver = ""
-		if s.telemetryClient.logClient != nil {
-			go s.telemetryClient.streamTelemetryToGCPLogging([]string{exp.serialize()})
-		} else if s.telemetryClient.esClient != nil {
-			go s.telemetryClient.streamDataToElastic([]string{exp.serialize()})
-		}
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	packedResponseMessage := obliviousResponse.Marshal()
-
-	answerEncryptionAndSerializeCompletionTime := time.Now().UnixNano()
-	timestamp.TargetAnswerEncryptionTime = answerEncryptionAndSerializeCompletionTime
-
-	if s.verbose {
-		log.Printf("Target response: %x", packedResponseMessage)
-	}
-
-	returnResponseTime := time.Now().UnixNano()
-	timestamp.EndTime = returnResponseTime
-
-	exp.Timestamp = timestamp
-	exp.Resolver = s.resolver[chosenResolver].name()
-	exp.Status = true
-
-	if s.telemetryClient.logClient != nil {
-		go s.telemetryClient.streamTelemetryToGCPLogging([]string{exp.serialize()})
-	} else if s.telemetryClient.esClient != nil {
-		go s.telemetryClient.streamDataToElastic([]string{exp.serialize()})
-	}
-
-	w.Header().Set("Content-Type", odohMessageContentType)
-	w.Write(packedResponseMessage)
-}
-
 func (s *targetServer) targetQueryHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+		log.Printf("Header: %v\n", r.Header.Get("Content-Type"))
 	}
 
 	if r.Header.Get("Content-Type") == dnsMessageContentType {
 		s.dohQueryHandler(w, r)
-	} else if r.Header.Get("Content-Type") == odohMessageContentType {
-		s.odohQueryHandler(w, r)
 	} else {
 		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)

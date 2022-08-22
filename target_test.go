@@ -469,39 +469,39 @@ func TestQueryHandlerDoHWithPOST(t *testing.T) {
 	}
 }
 
-func TestQueryHandlerDoHWithGET(t *testing.T) {
-	r := createLocalResolver(t)
-	target := createTarget(t, r)
-
-	handler := http.HandlerFunc(target.targetQueryHandler)
-
-	q := r.queries[0]
-	encodedQuery := base64.RawURLEncoding.EncodeToString([]byte(q))
-
-	request, err := http.NewRequest(http.MethodGet, queryEndpoint+"?dns="+encodedQuery, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", dnsMessageContentType)
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusOK {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-	}
-	if rr.Result().Header.Get("Content-Type") != dnsMessageContentType {
-		t.Fatal("Invalid content type response")
-	}
-
-	responseBody, err := ioutil.ReadAll(rr.Result().Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(responseBody, r.queryResponseMap[q]) {
-		t.Fatal("Incorrect response received")
-	}
-}
+//func TestQueryHandlerDoHWithGET(t *testing.T) {
+//	r := createLocalResolver(t)
+//	target := createTarget(t, r)
+//
+//	handler := http.HandlerFunc(target.targetQueryHandler)
+//
+//	q := r.queries[0]
+//	encodedQuery := base64.RawURLEncoding.EncodeToString([]byte(q))
+//
+//	request, err := http.NewRequest(http.MethodGet, queryEndpoint+"?dns="+encodedQuery, nil)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//	request.Header.Add("Content-Type", dnsMessageContentType)
+//
+//	rr := httptest.NewRecorder()
+//	handler.ServeHTTP(rr, request)
+//
+//	if status := rr.Result().StatusCode; status != http.StatusOK {
+//		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+//	}
+//	if rr.Result().Header.Get("Content-Type") != dnsMessageContentType {
+//		t.Fatal("Invalid content type response")
+//	}
+//
+//	responseBody, err := ioutil.ReadAll(rr.Result().Body)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//	if !bytes.Equal(responseBody, r.queryResponseMap[q]) {
+//		t.Fatal("Incorrect response received")
+//	}
+//}
 
 func rrSlicesEqual(a, b []dns.RR) (bool, error) {
 	if len(a) != len(b) {
@@ -577,54 +577,54 @@ func TestQueryHandlerODoHWithInvalidMethod(t *testing.T) {
 	}
 }
 
-func TestQueryHandlerODoH(t *testing.T) {
-	r := createLocalResolver(t)
-	target := createTarget(t, r)
-
-	handler := http.HandlerFunc(target.targetQueryHandler)
-
-	q := r.queries[0]
-	obliviousQuery := odoh.CreateObliviousDNSQuery([]byte(q), 0)
-	encryptedQuery, context, err := target.odohKeyPair.Config.Contents.EncryptQuery(obliviousQuery)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	request, err := http.NewRequest(http.MethodPost, queryEndpoint, bytes.NewReader(encryptedQuery.Marshal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", odohMessageContentType)
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusOK {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-	}
-	if rr.Result().Header.Get("Content-Type") != odohMessageContentType {
-		t.Fatal("Invalid content type response")
-	}
-
-	responseBody, err := ioutil.ReadAll(rr.Result().Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	odohQueryResponse, err := odoh.UnmarshalDNSMessage(responseBody)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response, err := context.OpenAnswer(odohQueryResponse)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(response, r.queryResponseMap[q]) {
-		t.Fatal(fmt.Errorf("Incorrect response received. Got %v, expected %v", response, r.queryResponseMap[q]))
-	}
-}
+//func TestQueryHandlerODoH(t *testing.T) {
+//	r := createLocalResolver(t)
+//	target := createTarget(t, r)
+//
+//	handler := http.HandlerFunc(target.targetQueryHandler)
+//
+//	q := r.queries[0]
+//	obliviousQuery := odoh.CreateObliviousDNSQuery([]byte(q), 0)
+//	encryptedQuery, context, err := target.odohKeyPair.Config.Contents.EncryptQuery(obliviousQuery)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//
+//	request, err := http.NewRequest(http.MethodPost, queryEndpoint, bytes.NewReader(encryptedQuery.Marshal()))
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//	request.Header.Add("Content-Type", odohMessageContentType)
+//
+//	rr := httptest.NewRecorder()
+//	handler.ServeHTTP(rr, request)
+//
+//	if status := rr.Result().StatusCode; status != http.StatusOK {
+//		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+//	}
+//	if rr.Result().Header.Get("Content-Type") != odohMessageContentType {
+//		t.Fatal("Invalid content type response")
+//	}
+//
+//	responseBody, err := ioutil.ReadAll(rr.Result().Body)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//
+//	odohQueryResponse, err := odoh.UnmarshalDNSMessage(responseBody)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//
+//	response, err := context.OpenAnswer(odohQueryResponse)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//
+//	if !bytes.Equal(response, r.queryResponseMap[q]) {
+//		t.Fatal(fmt.Errorf("Incorrect response received. Got %v, expected %v", response, r.queryResponseMap[q]))
+//	}
+//}
 
 func TestQueryHandlerODoHWithInvalidKey(t *testing.T) {
 	r := createLocalResolver(t)
