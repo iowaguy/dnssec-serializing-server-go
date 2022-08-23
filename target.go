@@ -295,13 +295,14 @@ func convertDsToSerialDs(ds *dns.DS) dns.SerialDS {
 
 func convertRrsigToSignature(rrsig *dns.RRSIG) dns.Signature {
 	s := dns.Signature{
-		Algorithm: rrsig.Algorithm,
-		Labels:    rrsig.Labels,
-		Ttl:       rrsig.OrigTtl,
-		Expires:   rrsig.Expiration,
-		Begins:    rrsig.Inception,
-		Key_tag:   rrsig.KeyTag,
-		Signature: []byte(rrsig.Signature),
+		Algorithm:  rrsig.Algorithm,
+		Labels:     rrsig.Labels,
+		Ttl:        rrsig.OrigTtl,
+		Expires:    rrsig.Expiration,
+		Begins:     rrsig.Inception,
+		Key_tag:    rrsig.KeyTag,
+		SignerName: rrsig.SignerName,
+		Signature:  []byte(rrsig.Signature),
 	}
 	s.Length = uint16(dns.Len(&s))
 	return s
@@ -375,6 +376,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 				l.Ds_records = make([]dns.SerialDS, 0)
 				l.Ds_records = append(l.Ds_records, ds)
 				l.Num_ds = uint8(len(l.Ds_records))
+				l.Rrtype = dns.RRType(dns.TypeDS)
 				zones[len(zones)-1].Exit = l
 			} else if l.LeavingType == dns.LeavingDSType {
 				l.Ds_records = append(l.Ds_records, ds)
@@ -408,6 +410,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 			default:
 				fmt.Printf("%v\n", t)
 				currentExit.Rrsig = convertRrsigToSignature(t)
+				currentExit.Rrtype = dns.RRType(t.TypeCovered)
 			}
 
 		case *dns.CNAME:
