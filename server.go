@@ -23,39 +23,20 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
-
-	"github.com/cisco/go-hpke"
-	odoh "github.com/cloudflare/odoh-go"
 )
 
 const (
-	// HPKE constants
-	kemID  = hpke.DHKEM_X25519
-	kdfID  = hpke.KDF_HKDF_SHA256
-	aeadID = hpke.AEAD_AESGCM128
-
-	// keying material (seed) should have as many bits of entropy as the bit
-	// length of the x25519 secret key
-	defaultSeedLength = 32
-
 	// HTTP constants. Fill in your proxy and target here.
-	defaultPort    = "8080"
-	proxyURI       = "https://dnstarget.example.net"
-	targetURI      = "https://dnsproxy.example.net"
-	proxyEndpoint  = "/proxy"
-	queryEndpoint  = "/dns-query"
-	healthEndpoint = "/health"
-	configEndpoint = "/.well-known/odohconfigs"
+	defaultPort   = "8080"
+	targetURI     = "https://dnsproxy.example.net"
+	queryEndpoint = "/dns-query"
 
 	// Environment variables
-	secretSeedEnvironmentVariable    = "SEED_SECRET_KEY"
 	targetNameEnvironmentVariable    = "TARGET_INSTANCE_NAME"
 	experimentIDEnvironmentVariable  = "EXPERIMENT_ID"
 	telemetryTypeEnvironmentVariable = "TELEMETRY_TYPE"
@@ -68,15 +49,14 @@ var (
 	nameServers = []string{"1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"}
 )
 
-type odohServer struct {
+type Server struct {
 	endpoints map[string]string
 	Verbose   bool
-	target    *targetServer
-	proxy     *proxyServer
+	target    *RecursiveResolver
 	DOHURI    string
 }
 
-func (s odohServer) indexHandler(w http.ResponseWriter, r *http.Request) {
+func (s Server) indexHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	fmt.Fprint(w, "DNSSEC Serialization Resolver\n")
 	fmt.Fprint(w, "----------------\n")
@@ -88,19 +68,6 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = defaultPort
-	}
-
-	var seed []byte
-	if seedHex := os.Getenv(secretSeedEnvironmentVariable); seedHex != "" {
-		log.Printf("Using Secret Key Seed : [%v]", seedHex)
-		var err error
-		seed, err = hex.DecodeString(seedHex)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		seed = make([]byte, defaultSeedLength)
-		rand.Read(seed)
 	}
 
 	var serverName string
@@ -133,16 +100,8 @@ func main() {
 		enableTLSServe = false
 	}
 
-	keyPair, err := odoh.CreateKeyPairFromSeed(kemID, kdfID, aeadID, seed)
-	if err != nil {
-		log.Fatal("Failed to create a private key. Exiting now.")
-	}
-
 	endpoints := make(map[string]string)
 	endpoints["Target"] = queryEndpoint
-	endpoints["Proxy"] = proxyEndpoint
-	endpoints["Health"] = healthEndpoint
-	endpoints["Config"] = configEndpoint
 
 	resolversInUse := make([]resolver, len(nameServers))
 
@@ -154,33 +113,21 @@ func main() {
 		resolversInUse[index] = resolver
 	}
 
-	target := &targetServer{
+	target := &RecursiveResolver{
 		verbose:            false,
 		resolver:           resolversInUse,
-		odohKeyPair:        keyPair,
 		telemetryClient:    getTelemetryInstance(telemetryType),
 		serverInstanceName: serverName,
 		experimentId:       experimentID,
 	}
 
-	proxy := &proxyServer{
-		client: &http.Client{
-			Transport: &http.Transport{
-				MaxIdleConnsPerHost: 1024,
-				TLSHandshakeTimeout: 0 * time.Second,
-			},
-		},
-	}
-
-	server := odohServer{
+	server := Server{
 		endpoints: endpoints,
 		target:    target,
-		proxy:     proxy,
 		DOHURI:    fmt.Sprintf("%s/%s", targetURI, queryEndpoint),
 	}
 
 	http.HandleFunc(queryEndpoint, server.target.targetQueryHandler)
-	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
 
 	if enableTLSServe {
