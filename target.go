@@ -26,21 +26,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/miekg/dns"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
 	"time"
-
-	odoh "github.com/cloudflare/odoh-go"
-	"github.com/miekg/dns"
 )
 
-type targetServer struct {
+type RecursiveResolver struct {
 	verbose            bool
 	resolver           []resolver
-	odohKeyPair        odoh.ObliviousDoHKeyPair
 	telemetryClient    *telemetry
 	serverInstanceName string
 	experimentId       string
@@ -106,8 +103,7 @@ func (s zoneStack) String() string {
 }
 
 const (
-	dnsMessageContentType  = "application/dns-message"
-	odohMessageContentType = "application/oblivious-dns-message"
+	dnsMessageContentType = "application/dns-message"
 )
 
 func min(a, b int) int {
@@ -136,7 +132,7 @@ func decodeDNSQuestion(encodedMessage []byte) (*dns.Msg, error) {
 	return msg, err
 }
 
-func (s *targetServer) parseQueryFromRequest(r *http.Request) (*dns.Msg, error) {
+func (s *RecursiveResolver) parseQueryFromRequest(r *http.Request) (*dns.Msg, error) {
 	switch r.Method {
 	case http.MethodGet:
 		var queryBody string
@@ -167,7 +163,7 @@ func (s *targetServer) parseQueryFromRequest(r *http.Request) (*dns.Msg, error) 
 	}
 }
 
-func (s *targetServer) fetchSingleDnssecRecord(domainName string, r resolver, qtype uint16) ([]dns.RR, error) {
+func (s *RecursiveResolver) fetchSingleDnssecRecord(domainName string, r resolver, qtype uint16) ([]dns.RR, error) {
 	dnsQuery := new(dns.Msg)
 	dnsQuery.SetQuestion(dns.Fqdn(domainName), qtype)
 	dnsQuery.SetEdns0(4096, true)
@@ -203,11 +199,11 @@ func (s *targetServer) fetchSingleDnssecRecord(domainName string, r resolver, qt
 	return response.Answer, err
 }
 
-func (s *targetServer) fetchDnskeyRecord(domainName string, r resolver) ([]dns.RR, error) {
+func (s *RecursiveResolver) fetchDnskeyRecord(domainName string, r resolver) ([]dns.RR, error) {
 	return s.fetchSingleDnssecRecord(domainName, r, dns.TypeDNSKEY)
 }
 
-func (s *targetServer) fetchDsRecord(domainName string, r resolver) ([]dns.RR, error) {
+func (s *RecursiveResolver) fetchDsRecord(domainName string, r resolver) ([]dns.RR, error) {
 	return s.fetchSingleDnssecRecord(domainName, r, dns.TypeDS)
 }
 
@@ -221,7 +217,7 @@ func containsCNAME(rrs []dns.RR) (*dns.CNAME, bool) {
 	return nil, false
 }
 
-func (s *targetServer) getZoneRRs(targetDomain []string, depth int, r resolver) ([]dns.RR, error) {
+func (s *RecursiveResolver) getZoneRRs(targetDomain []string, depth int, r resolver) ([]dns.RR, error) {
 	if depth == -1 {
 		return make([]dns.RR, 0), nil
 	}
@@ -249,7 +245,7 @@ func (s *targetServer) getZoneRRs(targetDomain []string, depth int, r resolver) 
 	return append(append(dnskeyRRs, dsRRs...), zs...), nil
 }
 
-func (s *targetServer) fetchDnssecRecords(targetDomain string, answer []dns.RR, r resolver) ([]dns.RR, error) {
+func (s *RecursiveResolver) fetchDnssecRecords(targetDomain string, answer []dns.RR, r resolver) ([]dns.RR, error) {
 	zones := append(dns.SplitDomainName(targetDomain), "")
 	rrs, err := s.getZoneRRs(zones, len(zones)-1, r)
 	if err != nil {
@@ -467,7 +463,7 @@ func addLeafRR(exit *dns.Leaving, rr dns.RR) {
 	exit.Num_rrs = uint8(len(exit.Rrs))
 }
 
-func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
+func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
 
 	packedQuery, err := q.Pack()
 	if err != nil {
@@ -512,7 +508,7 @@ func (s *targetServer) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte,
 	return packedResponse, err
 }
 
-func (s *targetServer) dohQueryHandler(w http.ResponseWriter, r *http.Request) {
+func (s *RecursiveResolver) dohQueryHandler(w http.ResponseWriter, r *http.Request) {
 	requestReceivedTime := time.Now()
 	exp := experiment{}
 	exp.ExperimentID = s.experimentId
@@ -557,32 +553,7 @@ func (s *targetServer) dohQueryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(packedResponse)
 }
 
-func (s *targetServer) parseObliviousQueryFromRequest(r *http.Request) (odoh.ObliviousDNSMessage, error) {
-	if r.Method != http.MethodPost {
-		return odoh.ObliviousDNSMessage{}, fmt.Errorf("Unsupported HTTP method for Oblivious DNS query: %s", r.Method)
-	}
-
-	defer r.Body.Close()
-	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return odoh.ObliviousDNSMessage{}, err
-	}
-
-	return odoh.UnmarshalDNSMessage(encryptedMessageBytes)
-}
-
-func (s *targetServer) createObliviousResponseForQuery(context odoh.ResponseContext, dnsResponse []byte) (odoh.ObliviousDNSMessage, error) {
-	response := odoh.CreateObliviousDNSResponse(dnsResponse, 0)
-	odohResponse, err := context.EncryptResponse(response)
-
-	if s.verbose {
-		log.Printf("Encrypted response: %x", odohResponse)
-	}
-
-	return odohResponse, err
-}
-
-func (s *targetServer) targetQueryHandler(w http.ResponseWriter, r *http.Request) {
+func (s *RecursiveResolver) targetQueryHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 		log.Printf("Header: %v\n", r.Header.Get("Content-Type"))
@@ -594,12 +565,4 @@ func (s *targetServer) targetQueryHandler(w http.ResponseWriter, r *http.Request
 		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	}
-}
-
-func (s *targetServer) configHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-
-	configSet := []odoh.ObliviousDoHConfig{s.odohKeyPair.Config}
-	configs := odoh.CreateObliviousDoHConfigs(configSet)
-	w.Write(configs.Marshal())
 }
