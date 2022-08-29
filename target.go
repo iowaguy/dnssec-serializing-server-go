@@ -163,6 +163,27 @@ func (s *RecursiveResolver) parseQueryFromRequest(r *http.Request) (*dns.Msg, er
 	}
 }
 
+func isSignedByParent(domainName string, rrs []dns.RR) bool {
+	segments := strings.Split(domainName, ".")
+	numberSegments := len(segments)
+	// fail fast
+	if numberSegments < 0 {
+		return false
+	}
+	parentDomain := strings.Join(segments[1:], ".")
+	for _, rrRecord := range rrs {
+		switch rrRecord.(type) {
+		case *dns.RRSIG:
+			t := (rrRecord).(*dns.RRSIG)
+			if t.SignerName == parentDomain &&
+				t.TypeCovered == dns.TypeNSEC || t.TypeCovered == dns.TypeNSEC3 || t.TypeCovered == dns.TypeSOA {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *RecursiveResolver) fetchSingleDnssecRecord(domainName string, r resolver, qtype uint16) ([]dns.RR, error) {
 	dnsQuery := new(dns.Msg)
 	dnsQuery.SetQuestion(dns.Fqdn(domainName), qtype)
@@ -185,6 +206,12 @@ func (s *RecursiveResolver) fetchSingleDnssecRecord(domainName string, r resolve
 		return nil, err
 	}
 	elapsed := time.Since(start)
+
+	// For proofs of nonexistence point to the Next Secure record (NSEC) which is in the Authority section.
+	//fmt.Printf("Response: %v\n", response)
+	if len(response.Answer) == 0 && !isSignedByParent(dns.Fqdn(domainName), response.Ns) {
+		return response.Ns, nil
+	}
 
 	packedResponse, err := response.Pack()
 	if err != nil {
@@ -222,9 +249,11 @@ func (s *RecursiveResolver) getZoneRRs(targetDomain []string, depth int, r resol
 		return make([]dns.RR, 0), nil
 	}
 	currentZone := dns.Fqdn(strings.Join(targetDomain[depth:], "."))
+	fmt.Printf("[%v] Querying %v\n", depth, currentZone)
 
 	dnskeyRRs, err := s.fetchDnskeyRecord(currentZone, r)
 	if err != nil {
+		fmt.Printf("%v Failed to fetch DNSKEY Records.", currentZone)
 		return nil, err
 	}
 
@@ -232,6 +261,7 @@ func (s *RecursiveResolver) getZoneRRs(targetDomain []string, depth int, r resol
 	if currentZone != "." {
 		dsRRs, err = s.fetchDsRecord(currentZone, r)
 		if err != nil {
+			fmt.Printf("%v Failed to fetch DS Records.", currentZone)
 			return nil, err
 		}
 
@@ -249,6 +279,7 @@ func (s *RecursiveResolver) fetchDnssecRecords(targetDomain string, answer []dns
 	zones := append(dns.SplitDomainName(targetDomain), "")
 	rrs, err := s.getZoneRRs(zones, len(zones)-1, r)
 	if err != nil {
+		fmt.Printf("Failed to fetch DNSSEC Records, error: %v\n", err)
 		return nil, err
 	}
 
@@ -267,6 +298,7 @@ func checkIfKSK(key *dns.DNSKEY) bool {
 }
 
 func convertDnskeyToKey(dnskey *dns.DNSKEY) dns.Key {
+	//fmt.Printf("Received DNSKEY: %v\n", dnskey.String())
 	k := dns.Key{
 		Flags:      dnskey.Flags,
 		Protocol:   dnskey.Protocol,
@@ -316,6 +348,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 		ZType:       dns.LeavingType,
 		LeavingType: dns.LeavingUncommitted,
 	}
+	leafAdded := false
 
 	for _, v := range rrs {
 		// set the zone name for the first zone we're traversing
@@ -404,20 +437,26 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 				// update the struct length after modifications
 				zones[len(zones)-1].Exit.Length = uint16(dns.Len(&zones[len(zones)-1].Exit))
 			default:
-				fmt.Printf("%v\n", t)
+				if leafAdded {
+					signerName := t.SignerName
+					zName := t.Hdr.Name
+					parentZName := dns.Fqdn(strings.Join(dns.SplitDomainName(zName)[1:], "."))
+					fmt.Printf("Zone: %v, Signer: %v, Parent Zone: %v\n", zName, signerName, parentZName)
+					if signerName == parentZName {
+						// Lookup the keys for the signer
+						currentEntry = &zones[len(zones)-1].Entry
+					}
+				}
 				currentExit.Rrsig = convertRrsigToSignature(t)
 				currentExit.Rrtype = dns.RRType(t.TypeCovered)
 			}
 
-		case *dns.CNAME:
-			return dns.DNSSECProof{}, errors.New("CNAME is not supported")
 		case *dns.DNAME:
 			return dns.DNSSECProof{}, errors.New("DNAME is not supported")
-		case *dns.TXT:
-			addLeafRR(currentExit, v)
-		case *dns.A:
-			addLeafRR(currentExit, v)
-		case *dns.AAAA:
+		case *dns.CNAME:
+			return dns.DNSSECProof{}, errors.New("CNAME is not supported")
+		case *dns.A, *dns.TXT, *dns.AAAA:
+			leafAdded = true
 			addLeafRR(currentExit, v)
 		default:
 			return dns.DNSSECProof{}, errors.New("Type " + t.String() + " is not supported")
@@ -493,6 +532,9 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 		}
 
 		response.Extra = append(response.Extra, &dnssecProof)
+
+		b, _ := response.Pack()
+		fmt.Printf("Response Size : %v\n", len(b))
 	}
 
 	packedResponse, err := response.Pack()
