@@ -351,6 +351,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 	leafAdded := false
 
 	for _, v := range rrs {
+		fmt.Printf("\u001B[32m %v \u001B[0m\n", v.String())
 		// set the zone name for the first zone we're traversing
 		if zoneName == "" {
 			zoneName = v.Header().Name
@@ -441,10 +442,11 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 					signerName := t.SignerName
 					zName := t.Hdr.Name
 					parentZName := dns.Fqdn(strings.Join(dns.SplitDomainName(zName)[1:], "."))
-					fmt.Printf("Zone: %v, Signer: %v, Parent Zone: %v\n", zName, signerName, parentZName)
 					if signerName == parentZName {
 						// Lookup the keys for the signer
 						currentEntry = &zones[len(zones)-1].Entry
+						zones[len(zones)-1].Exit.LeavingType = dns.LeavingOtherType
+						zones[len(zones)-1].Exit.Length = uint16(dns.Len(&zones[len(zones)-1].Exit))
 					}
 				}
 				currentExit.Rrsig = convertRrsigToSignature(t)
@@ -528,7 +530,8 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 		dnssecProof, err = makeRRsTraversable(allDNSSECRecords)
 		if err != nil {
 			log.Println("Failed serializing DNSSEC proofs:", err)
-			return nil, err
+			// Return the non DNSSEC serialized DNS response as fail-over
+			return response.Pack()
 		}
 
 		response.Extra = append(response.Extra, &dnssecProof)
