@@ -164,7 +164,7 @@ func (s *RecursiveResolver) parseQueryFromRequest(r *http.Request) (*dns.Msg, er
 }
 
 func isSignedByParent(domainName string, rrs []dns.RR) bool {
-	segments := strings.Split(domainName, ".")
+	segments := dns.SplitDomainName(domainName)
 	numberSegments := len(segments)
 	// fail fast
 	if numberSegments < 0 {
@@ -172,9 +172,8 @@ func isSignedByParent(domainName string, rrs []dns.RR) bool {
 	}
 	parentDomain := strings.Join(segments[1:], ".")
 	for _, rrRecord := range rrs {
-		switch rrRecord.(type) {
+		switch t := rrRecord.(type) {
 		case *dns.RRSIG:
-			t := (rrRecord).(*dns.RRSIG)
 			if t.SignerName == parentDomain &&
 				t.TypeCovered == dns.TypeNSEC || t.TypeCovered == dns.TypeNSEC3 || t.TypeCovered == dns.TypeSOA {
 				return true
@@ -535,9 +534,6 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 		}
 
 		response.Extra = append(response.Extra, &dnssecProof)
-
-		b, _ := response.Pack()
-		fmt.Printf("Response Size : %v\n", len(b))
 	}
 
 	packedResponse, err := response.Pack()
