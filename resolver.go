@@ -51,8 +51,14 @@ func (s targetResolver) resolve(query *dns.Msg) (*dns.Msg, error) {
 		return nil, fmt.Errorf("failed starting resolver connection")
 	}
 
-	connection.SetReadDeadline(time.Now().Add(s.timeout * time.Millisecond))
-	connection.SetWriteDeadline(time.Now().Add(s.timeout * time.Millisecond))
+	err = connection.SetReadDeadline(time.Now().Add(s.timeout * time.Millisecond))
+	if err != nil {
+		return nil, err
+	}
+	err = connection.SetWriteDeadline(time.Now().Add(s.timeout * time.Millisecond))
+	if err != nil {
+		return nil, err
+	}
 
 	if err := connection.WriteMsg(query); err != nil {
 		return nil, err

@@ -1,13 +1,9 @@
-module github.com/cloudflare/odoh-server-go
+module github.com/cloudflare/dnssec-serializing-server-go
 
-// +heroku goVersion go1.14
-// +scalingo goVersion go1.14
+// +heroku goVersion go1.19
+// +scalingo goVersion go1.19
 go 1.14
 
-require (
-	cloud.google.com/go/logging v1.1.1
-	github.com/elastic/go-elasticsearch/v8 v8.0.0-20201022194115-1af099fb3eca
-	github.com/miekg/dns v1.1.50
-)
+require github.com/miekg/dns v1.1.50
 
 replace github.com/miekg/dns v1.1.50 => github.com/iowaguy/dns v1.1.50-serial.6

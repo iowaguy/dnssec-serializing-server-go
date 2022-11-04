@@ -1,8 +1,4 @@
-# odoh-server-go
-
-[![Coverage Status](https://coveralls.io/repos/github/cloudflare/odoh-server-go/badge.svg?branch=master)](https://coveralls.io/github/cloudflare/odoh-server-go?branch=master)
-
-[Oblivious DoH Server](https://tools.ietf.org/html/draft-pauly-dprive-oblivious-doh)
+# DNSSEC Serializing Server 
 
 # Local development
 

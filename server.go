@@ -33,15 +33,12 @@ import (
 const (
 	// HTTP constants. Fill in your proxy and target here.
 	defaultPort   = "8080"
-	targetURI     = "https://dnsproxy.example.net"
 	queryEndpoint = "/dns-query"
 
 	// Environment variables
-	targetNameEnvironmentVariable    = "TARGET_INSTANCE_NAME"
-	experimentIDEnvironmentVariable  = "EXPERIMENT_ID"
-	telemetryTypeEnvironmentVariable = "TELEMETRY_TYPE"
-	certificateEnvironmentVariable   = "CERT"
-	keyEnvironmentVariable           = "KEY"
+	targetNameEnvironmentVariable  = "TARGET_INSTANCE_NAME"
+	certificateEnvironmentVariable = "CERT"
+	keyEnvironmentVariable         = "KEY"
 )
 
 var (
@@ -78,16 +75,6 @@ func main() {
 	}
 	log.Printf("Setting Server Name as %v", serverName)
 
-	var experimentID string
-	if experimentID = os.Getenv(experimentIDEnvironmentVariable); experimentID == "" {
-		experimentID = "EXP_LOCAL"
-	}
-
-	var telemetryType string
-	if telemetryType = os.Getenv(telemetryTypeEnvironmentVariable); telemetryType == "" {
-		telemetryType = "LOG"
-	}
-
 	var certFile string
 	if certFile = os.Getenv(certificateEnvironmentVariable); certFile == "" {
 		certFile = "cert.pem"
@@ -116,15 +103,12 @@ func main() {
 	target := &RecursiveResolver{
 		verbose:            false,
 		resolver:           resolversInUse,
-		telemetryClient:    getTelemetryInstance(telemetryType),
 		serverInstanceName: serverName,
-		experimentId:       experimentID,
 	}
 
 	server := Server{
 		endpoints: endpoints,
 		target:    target,
-		DOHURI:    fmt.Sprintf("%s/%s", targetURI, queryEndpoint),
 	}
 
 	http.HandleFunc(queryEndpoint, server.target.targetQueryHandler)

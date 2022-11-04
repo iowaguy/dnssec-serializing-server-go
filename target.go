@@ -38,9 +38,7 @@ import (
 type RecursiveResolver struct {
 	verbose            bool
 	resolver           []resolver
-	telemetryClient    *telemetry
 	serverInstanceName string
-	experimentId       string
 }
 
 type zoneData struct {
@@ -551,21 +549,12 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 
 func (s *RecursiveResolver) dohQueryHandler(w http.ResponseWriter, r *http.Request) {
 	requestReceivedTime := time.Now()
-	exp := experiment{}
-	exp.ExperimentID = s.experimentId
-	exp.IngestedFrom = s.serverInstanceName
-	exp.ProtocolType = "ClearText-ODOH"
-	exp.RequestID = nil
-	timestamp := runningTime{}
-
-	timestamp.Start = requestReceivedTime.UnixNano()
 	query, err := s.parseQueryFromRequest(r)
 	if err != nil {
 		log.Println("Failed parsing request:", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
-	timestamp.TargetQueryDecryptionTime = time.Now().UnixNano()
 
 	availableResolvers := len(s.resolver)
 	chosenResolver := rand.Intn(availableResolvers)
@@ -575,20 +564,8 @@ func (s *RecursiveResolver) dohQueryHandler(w http.ResponseWriter, r *http.Reque
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	endTime := time.Now().UnixNano()
-	timestamp.TargetQueryResolutionTime = endTime
-	timestamp.TargetAnswerEncryptionTime = endTime
-	timestamp.EndTime = endTime
-
-	exp.Timestamp = timestamp
-	exp.Resolver = s.resolver[chosenResolver].name()
-	exp.Status = true
-
-	if s.telemetryClient.logClient != nil {
-		go s.telemetryClient.streamTelemetryToGCPLogging([]string{exp.serialize()})
-	} else if s.telemetryClient.esClient != nil {
-		go s.telemetryClient.streamDataToElastic([]string{exp.serialize()})
-	}
+	timeTaken := time.Since(requestReceivedTime)
+	log.Printf("Time to process the Query at the resolver: %v\n", timeTaken)
 
 	w.Header().Set("Content-Type", dnsMessageContentType)
 	w.Write(packedResponse)
