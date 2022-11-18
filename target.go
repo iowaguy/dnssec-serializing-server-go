@@ -23,15 +23,18 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/miekg/dns"
+	"golang.org/x/sync/semaphore"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -501,50 +504,135 @@ func addLeafRR(exit *dns.Leaving, rr dns.RR) {
 	exit.Num_rrs = uint8(len(exit.Rrs))
 }
 
+func reverse(labels []string) {
+	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
+		labels[i], labels[j] = labels[j], labels[i]
+	}
+}
+
+func preComputeNecessaryDNSQueries(baseQuery *dns.Msg) ([]*dns.Msg, error) {
+	// Consider only the first query of multiple questions asked.
+	if len(baseQuery.Question) <= 0 {
+		return nil, errors.New("no question in the DNS query")
+	}
+	queryName := baseQuery.Question[0].Name
+	queryType := baseQuery.Question[0].Qtype
+
+	domainLabels := dns.SplitDomainName(queryName)
+
+	intermediateQueries := make([]string, 0)
+	for index, _ := range domainLabels {
+		dl := dns.Fqdn(strings.Join(domainLabels[index:], "."))
+		intermediateQueries = append(intermediateQueries, dl)
+	}
+	intermediateQueries = append(intermediateQueries, ".")
+	reverse(intermediateQueries)
+
+	queries := make([]*dns.Msg, 0)
+
+	for index, zoneName := range intermediateQueries {
+		if zoneName == "." {
+			// Only DNSKEY
+			q := makeDNSQuery(zoneName, dns.TypeDNSKEY)
+			queries = append(queries, q)
+			continue
+		}
+
+		// DNSKEY and DS records
+		dnskeyQuery := makeDNSQuery(zoneName, dns.TypeDNSKEY)
+		queries = append(queries, dnskeyQuery)
+		dsQuery := makeDNSQuery(zoneName, dns.TypeDS)
+		queries = append(queries, dsQuery)
+
+		if index == len(intermediateQueries)-1 {
+			// Last query
+			// Actual QueryType to be used.
+			q := makeDNSQuery(zoneName, queryType)
+			queries = append(queries, q)
+		}
+	}
+
+	for i, q := range queries {
+		fmt.Printf("[%v] --> %v (%v)\n", i, q.Question[0].Name, q.Question[0].Qtype)
+	}
+
+	return queries, nil
+}
+
+func makeDNSQuery(name string, queryType uint16) *dns.Msg {
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(name), queryType)
+	msg.Id = dns.Id()
+	msg.SetEdns0(4096, true)
+	return msg
+}
+
+func ResolveParallel(queries []*dns.Msg, r resolver) map[*dns.Msg]*dns.Msg {
+	var sem = semaphore.NewWeighted(int64(len(queries)))
+	var wg sync.WaitGroup
+	var mutex sync.Mutex
+	resolverResults := make(map[*dns.Msg]*dns.Msg)
+
+	for _, query := range queries {
+		err := sem.Acquire(context.Background(), 1)
+		if err != nil {
+			log.Println("unable to acquire semaphore.")
+		}
+		wg.Add(1)
+		go func(query *dns.Msg) {
+			res, resolverErr := r.resolve(query)
+			if resolverErr != nil {
+				log.Printf("failed to receive response...")
+			}
+			mutex.Lock()
+			resolverResults[query] = res
+			mutex.Unlock()
+			sem.Release(1)
+			wg.Done()
+		}(query)
+	}
+
+	wg.Wait()
+	return resolverResults
+}
+
 func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
+	queries, err := preComputeNecessaryDNSQueries(q)
 
-	packedQuery, err := q.Pack()
+	fmt.Printf("Need to make a total of %v queries\n", len(queries))
+
+	pStart := time.Now()
+	results := ResolveParallel(queries, r)
+	pEnd := time.Since(pStart)
+	fmt.Printf("Time to resolve all queries: %v\n", pEnd)
+	fmt.Printf("Number of resolved queries: %v\n", len(results))
+
+	// queries contains the order of the messages to be serialized and results contains the lookup map for RR records
+	requiredDNSSECRecords := make([]dns.RR, 0)
+	for _, query := range queries {
+		if res, ok := results[query]; ok {
+			answers := res.Answer
+			requiredDNSSECRecords = append(requiredDNSSECRecords, answers...)
+		}
+	}
+	fmt.Printf("Number of required DNSSEC Records: %v\n", len(requiredDNSSECRecords))
+	proof, err := makeRRsTraversable(requiredDNSSECRecords)
 	if err != nil {
-		log.Println("Failed encoding DNS query:", err)
-		return nil, err
+		fmt.Printf("proof computation failed in serialization. %v\n", err)
+	}
+	resp, ok := results[queries[len(queries)-1]]
+	if ok {
+		resp.Extra = append(resp.Extra, &proof)
 	}
 
-	if s.verbose {
-		log.Printf("Query=%s\n", packedQuery)
-	}
+	proofResponse, err := resp.Pack()
 
-	start := time.Now()
-	response, err := r.resolve(q)
-	elapsed := time.Since(start)
-
-	var dnssecProof dns.DNSSECProof
-	if q.IsEdns0().Do() {
-		allDNSSECRecords, err := s.fetchDnssecRecords(q.Question[0].Name, response.Answer, r)
-		if err != nil {
-			log.Println("Failed retrieving DNSSEC proofs:", err)
-			return nil, err
-		}
-		dnssecProof, err = makeRRsTraversable(allDNSSECRecords)
-		if err != nil {
-			log.Println("Failed serializing DNSSEC proofs:", err)
-			// Return the non DNSSEC serialized DNS response as fail-over
-			return response.Pack()
-		}
-
-		response.Extra = append(response.Extra, &dnssecProof)
-	}
-
-	packedResponse, err := response.Pack()
 	if err != nil {
 		log.Println("Failed encoding DNS response:", err)
 		return nil, err
 	}
 
-	if s.verbose {
-		log.Printf("Answer=%s elapsed=%s\n", packedResponse, elapsed.String())
-	}
-
-	return packedResponse, err
+	return proofResponse, err
 }
 
 func (s *RecursiveResolver) dohQueryHandler(w http.ResponseWriter, r *http.Request) {

@@ -23,7 +23,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"github.com/allegro/bigcache/v3"
 	"log"
 	"net/http"
 	"os"
@@ -43,7 +45,7 @@ const (
 
 var (
 	// DNS constants. Fill in a DNS server to forward to here.
-	nameServers = []string{"1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"}
+	nameServers = []string{"1.1.1.1:53"}
 )
 
 type Server struct {
@@ -93,9 +95,14 @@ func main() {
 	resolversInUse := make([]resolver, len(nameServers))
 
 	for index := 0; index < len(nameServers); index++ {
+		cache, err := bigcache.New(context.Background(), bigcache.DefaultConfig(24*time.Hour))
+		if err != nil {
+			panic("unable to initialize cache!")
+		}
 		resolver := &targetResolver{
 			timeout:    2500 * time.Millisecond,
 			nameserver: nameServers[index],
+			cache:      cache,
 		}
 		resolversInUse[index] = resolver
 	}

@@ -1,3 +1,5 @@
+github.com/allegro/bigcache/v3 v3.1.0 h1:H2Vp8VOvxcrB91o86fUSVJFqeuz8kpyyB02eH3bSzwk=
+github.com/allegro/bigcache/v3 v3.1.0/go.mod h1:aPyh7jEvrog9zAwx5N7+JUQX5dZTSGpxF1LAR4dr35I=
 github.com/iowaguy/dns v1.1.50-serial.6 h1:ot1v5yl4yKXhzUJbPo59jIbfZ3tQQimjphawJVba7QY=
 github.com/iowaguy/dns v1.1.50-serial.6/go.mod h1:sPlQfCr28EuEAFj4Na2SYJvb2NWD6KVVGy6izseBfbk=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=

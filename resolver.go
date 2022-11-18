@@ -24,6 +24,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/allegro/bigcache/v3"
 	"net"
 	"time"
 
@@ -38,6 +39,7 @@ type resolver interface {
 type targetResolver struct {
 	nameserver string
 	timeout    time.Duration
+	cache      *bigcache.BigCache
 }
 
 func (s targetResolver) name() string {
@@ -45,8 +47,31 @@ func (s targetResolver) name() string {
 }
 
 func (s targetResolver) resolve(query *dns.Msg) (*dns.Msg, error) {
-	connection := new(dns.Conn)
 	var err error
+	// Lookup cache first
+	queryFQDN := query.Question[0].Name
+	queryQType := query.Question[0].Qtype
+	cacheKey := fmt.Sprintf("%v|%v", queryFQDN, queryQType)
+	// Greedy optimization for only caching Root, TLD and ignore others
+	potentialInCache := len(dns.SplitDomainName(queryFQDN)) < 2
+	if potentialInCache {
+		entry, err := s.cache.Get(cacheKey)
+		if err != nil {
+			goto performNetworking
+		}
+		resp := new(dns.Msg)
+		if err := resp.Unpack(entry); err != nil {
+			goto performNetworking
+		}
+		resp.Id = query.Id
+		return resp, err
+	}
+
+performNetworking:
+	{
+	}
+	connection := new(dns.Conn)
+
 	if connection.Conn, err = net.DialTimeout("tcp", s.nameserver, s.timeout*time.Millisecond); err != nil {
 		return nil, fmt.Errorf("failed starting resolver connection")
 	}
@@ -67,6 +92,17 @@ func (s targetResolver) resolve(query *dns.Msg) (*dns.Msg, error) {
 	response, err := connection.ReadMsg()
 	if err != nil {
 		return nil, err
+	}
+
+	if potentialInCache {
+		respBuffer, err := response.Pack()
+		if err != nil {
+			fmt.Println("Unable to pack the response correctly. Malformed?")
+		}
+		err = s.cache.Set(cacheKey, respBuffer)
+		if err != nil {
+			fmt.Println("Unable to insert data into cache.")
+		}
 	}
 
 	response.Id = query.Id

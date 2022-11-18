@@ -4,6 +4,10 @@ module github.com/cloudflare/dnssec-serializing-server-go
 // +scalingo goVersion go1.19
 go 1.14
 
-require github.com/miekg/dns v1.1.50
+require (
+	github.com/allegro/bigcache/v3 v3.1.0 // indirect
+	github.com/miekg/dns v1.1.50
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
+)
 
 replace github.com/miekg/dns v1.1.50 => github.com/iowaguy/dns v1.1.50-serial.6
