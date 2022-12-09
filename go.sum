@@ -1,7 +1,7 @@
 github.com/allegro/bigcache/v3 v3.1.0 h1:H2Vp8VOvxcrB91o86fUSVJFqeuz8kpyyB02eH3bSzwk=
 github.com/allegro/bigcache/v3 v3.1.0/go.mod h1:aPyh7jEvrog9zAwx5N7+JUQX5dZTSGpxF1LAR4dr35I=
-github.com/iowaguy/dns v1.1.50-serial.6 h1:ot1v5yl4yKXhzUJbPo59jIbfZ3tQQimjphawJVba7QY=
-github.com/iowaguy/dns v1.1.50-serial.6/go.mod h1:sPlQfCr28EuEAFj4Na2SYJvb2NWD6KVVGy6izseBfbk=
+github.com/iowaguy/dns v1.1.50-restructure.4 h1:2yRLsUs7K2fgIVDnog5BMwm7Kk6E5I+4DQKs54vXRTA=
+github.com/iowaguy/dns v1.1.50-restructure.4/go.mod h1:sPlQfCr28EuEAFj4Na2SYJvb2NWD6KVVGy6izseBfbk=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=

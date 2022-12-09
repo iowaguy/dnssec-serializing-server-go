@@ -12,7 +12,7 @@ Then build and run the server as follows:
 
 ~~~
 $ make all
-$ CERT=cert.pem KEY=key.pem PORT=4567 ./odoh-server
+$ CERT=cert.pem KEY=key.pem PORT=4567 ./server
 ~~~
 
 By default, the proxy listens on `/proxy` and the target listens on `/dns-query`.

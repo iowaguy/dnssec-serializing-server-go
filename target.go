@@ -287,14 +287,13 @@ func (s *RecursiveResolver) fetchDnssecRecords(targetDomain string, answer []dns
 }
 
 // Check if the provided key is a key-signing key
-func checkIfKSK(key *dns.DNSKEY) bool {
-	// is zone key
-	isKey := 0 != key.Flags&dns.ZONE
+func isKSK(key *dns.DNSKEY) bool {
+	isZoneKey := key.Flags&dns.ZONE > 0
 
 	// is Secure Entry Point
-	isSEP := 0 != key.Flags&dns.SEP
+	isSEP := key.Flags&dns.SEP > 0
 
-	return isKey && isSEP
+	return !isZoneKey && isSEP
 }
 
 func convertDnskeyToKey(dnskey *dns.DNSKEY) dns.Key {
@@ -336,8 +335,95 @@ func convertRrsigToSignature(rrsig *dns.RRSIG) dns.Signature {
 	return s
 }
 
+func makeEmptyZone() *dns.Zone {
+	return &dns.Zone{
+		Keys:  make([]dns.DNSKEY, 0),
+		KeySigs:  make([]dns.RRSIG, 0),
+		DSSet:  make([]dns.DS, 0),
+		DSSigs:  make([]dns.RRSIG, 0),
+		Leaves:  make([]dns.RR, 0),
+		LeavesSigs:  make([]dns.RRSIG, 0),
+	}
+}
+
+func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
+	zones := make([]dns.Zone, 0)
+	zoneName := ""
+	currentZone := makeEmptyZone()
+	currentZone.PreviousName = dns.Name(".")
+
+	for _, v := range rrs {
+		fmt.Printf("\u001B[32m %v \u001B[0m\n", v.String())
+		// set the zone name for the first zone we're traversing
+		if zoneName == "" {
+			zoneName = v.Header().Name
+		}
+
+		// check if this record is part of a new zone
+		if v.Header().Name != zoneName {
+			zoneName = v.Header().Name
+			newZone := makeEmptyZone()
+			newZone.PreviousName = dns.Name(currentZone.Name)
+			zones = append(zones, *currentZone)
+			currentZone = newZone
+		}
+
+		// still reading records from the same zone
+		switch t := v.(type) {
+		case *dns.DNSKEY:
+			if !isKSK(t) {
+				// If the key is a zone signing key, then we can use it to check the
+				// RRSIGs. Setting the key index to be the last node in the Keys array,
+				// which is the current key we are looking at.
+				currentZone.ZSKIndex = uint8(len(currentZone.Keys))
+			}
+
+			currentZone.Keys = append(currentZone.Keys, *t)
+			currentZone.NumKeys = uint8(len(currentZone.Keys))
+		case *dns.DS:
+			currentZone.DSSet = append(currentZone.DSSet, *t)
+			currentZone.NumDS = uint8(len(currentZone.DSSet))
+			// ds := convertDsToSerialDs(t)
+
+			if len(zones) == 0 {
+				return dns.Chain{}, errors.New("Root zone cannot have a DS record")
+			}
+		case *dns.RRSIG:
+			switch t.TypeCovered {
+			case dns.TypeDNSKEY:
+				currentZone.KeySigs = append(currentZone.KeySigs, *t)
+			case dns.TypeDS:
+				if len(zones) == 0 {
+					return dns.Chain{}, errors.New("Root zone cannot have a DS record")
+				}
+
+				currentZone.DSSigs = append(currentZone.DSSigs, *t)
+			default:
+				currentZone.LeavesSigs = append(currentZone.LeavesSigs, *t)
+			}
+
+		case *dns.DNAME:
+			return dns.Chain{}, errors.New("DNAME is not supported")
+		case *dns.CNAME:
+			return dns.Chain{}, errors.New("CNAME is not supported")
+		case *dns.A, *dns.TXT, *dns.AAAA:
+			currentZone.Leaves = append(currentZone.Leaves, t)
+			currentZone.NumLeaves = uint8(len(currentZone.Leaves))
+		default:
+			return dns.Chain{}, errors.New("Type " + t.String() + " is not supported")
+		}
+	}
+
+	return dns.Chain{
+		Version: 1,
+		InitialKeyTag: 0,
+		NumZones: uint8(len(zones)),
+		Zones: zones,
+	}, nil
+}
+
 // The input resource records are already in canonical order
-func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
+func makeRRsTraversableOld(rrs []dns.RR) (dns.DNSSECProof, error) {
 	zones := make([]dns.ZonePair, 0)
 	zoneName := ""
 	currentEntry := &dns.Entering{
@@ -388,7 +474,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.DNSSECProof, error) {
 		// still reading records from the same zone
 		switch t := v.(type) {
 		case *dns.DNSKEY:
-			if checkIfKSK(t) {
+			if isKSK(t) {
 				currentEntry.Entry_key_index = uint8(len(currentEntry.Keys))
 			}
 
