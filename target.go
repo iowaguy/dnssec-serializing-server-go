@@ -44,65 +44,6 @@ type RecursiveResolver struct {
 	serverInstanceName string
 }
 
-type zoneData struct {
-	zoneName  string
-	dnskeyRRs []dns.RR
-	dsRRs     []dns.RR
-}
-
-func (z zoneData) String() string {
-	builder := strings.Builder{}
-	builder.WriteString(z.zoneName)
-	builder.WriteString("\n")
-	for _, key := range z.dnskeyRRs {
-		builder.WriteString(key.String())
-		builder.WriteString("\n")
-	}
-	for _, ds := range z.dsRRs {
-		builder.WriteString(ds.String())
-		builder.WriteString("\n")
-	}
-	return builder.String()
-}
-
-type zoneStack []zoneData
-
-func (s zoneStack) isEmpty() bool {
-	return len(s) == 0
-}
-
-func (s zoneStack) push(v zoneData) zoneStack {
-	return append(s, v)
-}
-
-func (s zoneStack) pop() (zoneStack, zoneData) {
-	if s.isEmpty() {
-		return s, zoneData{}
-	} else {
-		l := len(s)
-		return s[:l-1], s[l-1]
-	}
-}
-
-func (s zoneStack) collect() []dns.RR {
-	rrs := make([]dns.RR, 0)
-	for _, z := range s {
-		rrs = append(rrs, z.dnskeyRRs...)
-		rrs = append(rrs, z.dsRRs...)
-	}
-
-	return rrs
-}
-
-func (s zoneStack) String() string {
-	builder := strings.Builder{}
-
-	for _, z := range s {
-		builder.WriteString(z.String())
-	}
-	return builder.String()
-}
-
 const (
 	dnsMessageContentType = "application/dns-message"
 )
