@@ -337,6 +337,10 @@ func convertRrsigToSignature(rrsig *dns.RRSIG) dns.Signature {
 
 func makeEmptyZone() *dns.Zone {
 	return &dns.Zone{
+		Hdr: dns.RR_Header{
+			Name: ".",
+			Rrtype: dns.TypeZone,
+		},
 		Keys:  make([]dns.DNSKEY, 0),
 		KeySigs:  make([]dns.RRSIG, 0),
 		DSSet:  make([]dns.DS, 0),
@@ -346,6 +350,7 @@ func makeEmptyZone() *dns.Zone {
 	}
 }
 
+// At the start, we assume that the records are already in canonical ordering
 func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 	zones := make([]dns.Zone, 0)
 	zoneName := ""
@@ -357,6 +362,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 		// set the zone name for the first zone we're traversing
 		if zoneName == "" {
 			zoneName = v.Header().Name
+			currentZone.Name = dns.Name(zoneName)
 		}
 
 		// check if this record is part of a new zone
@@ -366,6 +372,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 			newZone.PreviousName = dns.Name(currentZone.Name)
 			zones = append(zones, *currentZone)
 			currentZone = newZone
+			currentZone.Name = dns.Name(zoneName)
 		}
 
 		// still reading records from the same zone
@@ -383,7 +390,6 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 		case *dns.DS:
 			currentZone.DSSet = append(currentZone.DSSet, *t)
 			currentZone.NumDS = uint8(len(currentZone.DSSet))
-			// ds := convertDsToSerialDs(t)
 
 			if len(zones) == 0 {
 				return dns.Chain{}, errors.New("Root zone cannot have a DS record")
@@ -414,7 +420,17 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 		}
 	}
 
+	// Add final zone to list
+	zones = append(zones, *currentZone)
+	currentZone.Name = dns.Name(zoneName)
+
 	return dns.Chain{
+		Hdr: dns.RR_Header{
+			// Name: string(currentZone.Name),
+			Name: ".",
+			Rrtype: dns.TypeChain,
+
+		},
 		Version: 1,
 		InitialKeyTag: 0,
 		NumZones: uint8(len(zones)),
