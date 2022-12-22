@@ -398,14 +398,17 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 			switch t.TypeCovered {
 			case dns.TypeDNSKEY:
 				currentZone.KeySigs = append(currentZone.KeySigs, *t)
+				currentZone.NumKeySigs = uint8(len(currentZone.KeySigs))
 			case dns.TypeDS:
 				if len(zones) == 0 {
 					return dns.Chain{}, errors.New("Root zone cannot have a DS record")
 				}
 
 				currentZone.DSSigs = append(currentZone.DSSigs, *t)
+				currentZone.NumDSSigs = uint8(len(currentZone.DSSigs))
 			default:
 				currentZone.LeavesSigs = append(currentZone.LeavesSigs, *t)
+				currentZone.NumLeavesSigs = uint8(len(currentZone.LeavesSigs))
 			}
 
 		case *dns.DNAME:
