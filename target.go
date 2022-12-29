@@ -27,6 +27,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/cloudflare/odoh-go"
 	"github.com/miekg/dns"
 	"golang.org/x/sync/semaphore"
 	"io/ioutil"
@@ -42,10 +43,12 @@ type RecursiveResolver struct {
 	verbose            bool
 	resolver           []resolver
 	serverInstanceName string
+	odohKeyPair        odoh.ObliviousDoHKeyPair
 }
 
 const (
-	dnsMessageContentType = "application/dns-message"
+	dnsMessageContentType     = "application/dns-message"
+	odohDnsMessageContentType = "application/oblivious-dns-message"
 )
 
 func min(a, b int) int {
@@ -74,34 +77,59 @@ func decodeDNSQuestion(encodedMessage []byte) (*dns.Msg, error) {
 	return msg, err
 }
 
-func (s *RecursiveResolver) parseQueryFromRequest(r *http.Request) (*dns.Msg, error) {
+func (s *RecursiveResolver) parseQueryFromRequest(r *http.Request) (*dns.Msg, *odoh.ResponseContext, error) {
 	switch r.Method {
 	case http.MethodGet:
 		var queryBody string
 		if queryBody = r.URL.Query().Get("dns"); queryBody == "" {
-			return nil, fmt.Errorf("Missing DNS query parameter in GET request")
+			return nil, nil, fmt.Errorf("Missing DNS query parameter in GET request")
 		}
 
 		encodedMessage, err := base64.RawURLEncoding.DecodeString(queryBody)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		return decodeDNSQuestion(encodedMessage)
+		query, err := decodeDNSQuestion(encodedMessage)
+		if err != nil {
+			return nil, nil, err
+		}
+		return query, nil, nil
 	case http.MethodPost:
-		if r.Header.Get("Content-Type") != dnsMessageContentType {
-			return nil, fmt.Errorf("incorrect content type, expected '%s', got %s", dnsMessageContentType, r.Header.Get("Content-Type"))
+		if r.Header.Get("Content-Type") != dnsMessageContentType && r.Header.Get("Content-Type") != odohDnsMessageContentType {
+			return nil, nil, fmt.Errorf("incorrect content type, expected '%s' or '%s', got %s", dnsMessageContentType, odohDnsMessageContentType, r.Header.Get("Content-Type"))
 		}
 
 		defer r.Body.Close()
 		encodedMessage, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		return decodeDNSQuestion(encodedMessage)
+		if r.Header.Get("Content-Type") == odohDnsMessageContentType {
+			fmt.Printf("Treating it as ODoH message type and unmarshaling.\n")
+			encryptedMessage, err := odoh.UnmarshalDNSMessage(encodedMessage) // This message is encrypted here.
+			if err != nil {
+				return nil, nil, err
+			}
+			obliviousQuery, responseContext, err := s.odohKeyPair.DecryptQuery(encryptedMessage)
+			if err != nil {
+				return nil, nil, err
+			}
+			query, err := decodeDNSQuestion(obliviousQuery.Message())
+			if err != nil {
+				return nil, nil, err
+			}
+			return query, &responseContext, nil
+		}
+
+		query, err := decodeDNSQuestion(encodedMessage)
+		if err != nil {
+			return nil, nil, err
+		}
+		return query, nil, nil
 	default:
-		return nil, fmt.Errorf("unsupported HTTP method")
+		return nil, nil, fmt.Errorf("unsupported HTTP method")
 	}
 }
 
@@ -578,7 +606,7 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 
 func (s *RecursiveResolver) dohQueryHandler(w http.ResponseWriter, r *http.Request) {
 	requestReceivedTime := time.Now()
-	query, err := s.parseQueryFromRequest(r)
+	query, _, err := s.parseQueryFromRequest(r)
 	if err != nil {
 		log.Println("Failed parsing request:", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -608,8 +636,48 @@ func (s *RecursiveResolver) targetQueryHandler(w http.ResponseWriter, r *http.Re
 
 	if r.Header.Get("Content-Type") == dnsMessageContentType {
 		s.dohQueryHandler(w, r)
+	} else if r.Header.Get("Content-Type") == odohDnsMessageContentType {
+		s.odohQueryHandler(w, r)
 	} else {
 		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	}
+}
+
+func (s *RecursiveResolver) odohQueryHandler(w http.ResponseWriter, r *http.Request) {
+	requestReceivedTime := time.Now()
+	query, responseContext, err := s.parseQueryFromRequest(r)
+	if err != nil {
+		log.Println("Failed parsing request:", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	availableResolvers := len(s.resolver)
+	chosenResolver := rand.Intn(availableResolvers)
+	packedResponse, err := s.resolveQueryWithResolver(query, s.resolver[chosenResolver])
+	if err != nil {
+		log.Println("Failed resolving DNS query:", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	timeTaken := time.Since(requestReceivedTime)
+	log.Printf("Time to process the Query at the resolver: %v\n", timeTaken)
+
+	obliviousResponse := odoh.CreateObliviousDNSResponse(packedResponse, 0)
+	encryptedResponse, err := responseContext.EncryptResponse(obliviousResponse)
+	if err != nil {
+		log.Println("Unable to encrypt response using AEAD.", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", dnsMessageContentType)
+	w.Write(encryptedResponse.Marshal())
+}
+
+func (s *RecursiveResolver) odohConfigHandler(writer http.ResponseWriter, request *http.Request) {
+	log.Printf("Retrieving ODoH Configruation from the resolver\n")
+	configuration := s.odohKeyPair.Config
+	fmt.Printf("%v\n", configuration)
+	writer.Write(configuration.Marshal())
 }

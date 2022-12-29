@@ -1,5 +1,16 @@
 # DNSSEC Serializing Server 
 
+The server binds onto default ports 8080 (HTTP), 9090 (UDP), 9091 (TCP) and provides the serialized DNS resolver responses to the clients.
+
+Clients can test with the custom validating client or test with default `dig` commands as follows:
+
+```shell
+$ dig @127.0.0.1 -p 9090 cloudflare.com A +dnssec # to send a UDP DNS query requiring a serialized DNS proof
+$ dig @127.0.0.1 -p 9091 cloudflare.com A +dnssec +tcp # to send a TCP DNS query requiring a serialized DNS proof
+```
+
+Please use the validating client to send `ODoH` requests, which are sent to the HTTP server listener and differentiated based on the `Content-Type` header.
+
 # Local development
 
 To deploy the server locally, first acquire a TLS certificate using [mkcert](https://github.com/FiloSottile/mkcert) as follows:
@@ -91,29 +102,6 @@ $ PORT=443 ./odoh-server &
 
 This will run the server until completion. You must configure the server to restart should it
 terminate prematurely.
-
-### GCP
-
-To deploy, run:
-
-~~~
-$ gcloud app deploy proxy.yaml
-...
-$ gcloud app deploy target.yaml
-...
-~~~
-
-To check on its status, run:
-
-~~~
-$ gcloud app browse
-~~~
-
-To stream logs when deployed, run
-
-~~~
-$ gcloud app logs tail -s default
-~~~
 
 ### Reverse proxy
 

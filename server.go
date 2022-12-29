@@ -26,6 +26,9 @@ import (
 	"context"
 	"fmt"
 	"github.com/allegro/bigcache/v3"
+	"github.com/cisco/go-hpke"
+	"github.com/cloudflare/odoh-go"
+	"github.com/miekg/dns"
 	"log"
 	"net/http"
 	"os"
@@ -33,19 +36,12 @@ import (
 )
 
 const (
-	// HTTP constants. Fill in your proxy and target here.
-	defaultPort   = "8080"
-	queryEndpoint = "/dns-query"
-
 	// Environment variables
 	targetNameEnvironmentVariable  = "TARGET_INSTANCE_NAME"
 	certificateEnvironmentVariable = "CERT"
 	keyEnvironmentVariable         = "KEY"
-)
 
-var (
-	// DNS constants. Fill in a DNS server to forward to here.
-	nameServers = []string{"1.1.1.1:53"}
+	ConfigurationPath = "config/configuration.yml"
 )
 
 type Server struct {
@@ -64,9 +60,12 @@ func (s Server) indexHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	c := LoadConfig(ConfigurationPath)
+	fmt.Printf("%v\n", c)
+
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = defaultPort
+		port = c.getDoHPort()
 	}
 
 	var serverName string
@@ -90,7 +89,9 @@ func main() {
 	}
 
 	endpoints := make(map[string]string)
-	endpoints["Target"] = queryEndpoint
+	endpoints["Target"] = c.getDoHEndpoint()
+
+	nameServers := c.getConfiguredUpstreamResolvers()
 
 	resolversInUse := make([]resolver, len(nameServers))
 
@@ -107,10 +108,50 @@ func main() {
 		resolversInUse[index] = resolver
 	}
 
+	udpOrTcpResolver := UDPorTCPRecursiveResolver{
+		resolver: resolversInUse,
+		verbose:  false,
+	}
+
+	udpTarget := dns.Server{
+		Addr:    c.getUDPBindAddr(),
+		Net:     "udp",
+		Handler: &udpOrTcpResolver,
+		UDPSize: c.getUDPResponsePacketSize(),
+	}
+
+	go func() {
+		log.Printf("Starting UDP Listening Server on %v\n", c.getUDPBindAddr())
+		err := udpTarget.ListenAndServe()
+		if err != nil {
+			log.Printf("failed to start UDP Server. Error:%v\n", err)
+		}
+	}()
+
+	tcpTarget := dns.Server{
+		Addr:    c.getTCPBindAddr(),
+		Net:     "tcp",
+		Handler: &udpOrTcpResolver,
+	}
+
+	go func() {
+		log.Printf("Starting TCP Listening Server on %v\n", c.getTCPBindAddr())
+		err := tcpTarget.ListenAndServe()
+		if err != nil {
+			log.Printf("failed to start UDP Server. Error:%v\n", err)
+		}
+	}()
+
+	keyPair, err := odoh.CreateKeyPairFromSeed(hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, c.getODoHKeyPairGenSeed())
+	if err != nil {
+		log.Fatalf("Unable to generate a keypair")
+	}
+
 	target := &RecursiveResolver{
 		verbose:            false,
 		resolver:           resolversInUse,
 		serverInstanceName: serverName,
+		odohKeyPair:        keyPair,
 	}
 
 	server := Server{
@@ -118,7 +159,8 @@ func main() {
 		target:    target,
 	}
 
-	http.HandleFunc(queryEndpoint, server.target.targetQueryHandler)
+	http.HandleFunc(c.getODoHConfigEndpoint(), server.target.odohConfigHandler)
+	http.HandleFunc(c.getDoHEndpoint(), server.target.targetQueryHandler)
 	http.HandleFunc("/", server.indexHandler)
 
 	if enableTLSServe {

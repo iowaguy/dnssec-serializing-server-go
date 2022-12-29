@@ -1,0 +1,16 @@
+protocols: ["https", "udp", "tcp", "odoh"]
+https:
+  port: "8080"
+  endpoint: "/dns-query"
+udp:
+  host: "0.0.0.0"
+  port: "9090"
+  size: 4096
+tcp:
+  host: "0.0.0.0"
+  port: "9091"
+odoh:
+  seed: "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"  # Note: Change the seed.
+  config_endpoint: "/.well-known/odohconfigs"
+upstream:
+  - "1.1.1.1:53"
