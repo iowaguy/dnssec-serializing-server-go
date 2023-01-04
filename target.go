@@ -307,15 +307,15 @@ func convertRrsigToSignature(rrsig *dns.RRSIG) dns.Signature {
 func makeEmptyZone() *dns.Zone {
 	return &dns.Zone{
 		Hdr: dns.RR_Header{
-			Name: ".",
+			Name:   ".",
 			Rrtype: dns.TypeZone,
 		},
-		Keys:  make([]dns.DNSKEY, 0),
-		KeySigs:  make([]dns.RRSIG, 0),
-		DSSet:  make([]dns.DS, 0),
-		DSSigs:  make([]dns.RRSIG, 0),
-		Leaves:  make([]dns.RR, 0),
-		LeavesSigs:  make([]dns.RRSIG, 0),
+		Keys:       make([]dns.DNSKEY, 0),
+		KeySigs:    make([]dns.RRSIG, 0),
+		DSSet:      make([]dns.DS, 0),
+		DSSigs:     make([]dns.RRSIG, 0),
+		Leaves:     make([]dns.RR, 0),
+		LeavesSigs: make([]dns.RRSIG, 0),
 	}
 }
 
@@ -384,7 +384,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 			return dns.Chain{}, errors.New("DNAME is not supported")
 		case *dns.CNAME:
 			return dns.Chain{}, errors.New("CNAME is not supported")
-		case *dns.A, *dns.TXT, *dns.AAAA:
+		case *dns.A, *dns.TXT, *dns.AAAA, *dns.NS:
 			currentZone.Leaves = append(currentZone.Leaves, t)
 			currentZone.NumLeaves = uint8(len(currentZone.Leaves))
 		default:
@@ -399,14 +399,13 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 	return dns.Chain{
 		Hdr: dns.RR_Header{
 			// Name: string(currentZone.Name),
-			Name: ".",
+			Name:   ".",
 			Rrtype: dns.TypeChain,
-
 		},
-		Version: 1,
+		Version:       1,
 		InitialKeyTag: 0,
-		NumZones: uint8(len(zones)),
-		Zones: zones,
+		NumZones:      uint8(len(zones)),
+		Zones:         zones,
 	}, nil
 }
 
