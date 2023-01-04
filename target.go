@@ -671,6 +671,13 @@ func ResolveParallel(queries []*dns.Msg, r resolver) map[*dns.Msg]*dns.Msg {
 }
 
 func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]byte, error) {
+	queryId := q.Id
+	dnssecRequestedOpts := q.IsEdns0()
+	dnssecRequested := false
+	if dnssecRequestedOpts != nil {
+		dnssecRequested = dnssecRequestedOpts.Do()
+	}
+
 	queries, err := preComputeNecessaryDNSQueries(q)
 
 	fmt.Printf("Need to make a total of %v queries\n", len(queries))
@@ -697,6 +704,26 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 	resp, ok := results[queries[len(queries)-1]]
 	if ok {
 		resp.Extra = append(resp.Extra, &proof)
+	}
+
+	// Force set response ID to match query ID for dig warnings
+	resp.Id = queryId
+
+	// Keep the server behavior consistent with a UDP based resolver
+	// Perform all the necessary checks of a honest resolver and drop the signatures
+	// from the final answer. Also remove the proof if dnssec has not been requested.
+
+	if !dnssecRequested {
+		answerRR := resp.Answer
+		newRR := make([]dns.RR, 0)
+		for _, rr := range answerRR {
+			if rr.Header().Rrtype == dns.TypeRRSIG {
+				continue
+			}
+			newRR = append(newRR, rr)
+		}
+		resp.Answer = newRR
+		resp.Extra = make([]dns.RR, 0)
 	}
 
 	proofResponse, err := resp.Pack()

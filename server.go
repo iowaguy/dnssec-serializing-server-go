@@ -61,7 +61,6 @@ func (s Server) indexHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	c := LoadConfig(ConfigurationPath)
-	fmt.Printf("%v\n", c)
 
 	port := os.Getenv("PORT")
 	if port == "" {
