@@ -384,7 +384,7 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 			return dns.Chain{}, errors.New("DNAME is not supported")
 		case *dns.CNAME:
 			return dns.Chain{}, errors.New("CNAME is not supported")
-		case *dns.A, *dns.TXT, *dns.AAAA, *dns.NS:
+		case *dns.A, *dns.TXT, *dns.AAAA, *dns.NS, *dns.MX:
 			currentZone.Leaves = append(currentZone.Leaves, t)
 			currentZone.NumLeaves = uint8(len(currentZone.Leaves))
 		default:
@@ -702,6 +702,10 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 	}
 	resp, ok := results[queries[len(queries)-1]]
 	if ok {
+		// Clear glue records from resolver and replace with proof in ADDITIONAL section
+		resetExtras := make([]dns.RR, 0)
+		resp.Extra = resetExtras
+		// Include the proof.
 		resp.Extra = append(resp.Extra, &proof)
 	}
 

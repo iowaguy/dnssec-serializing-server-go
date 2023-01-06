@@ -45,6 +45,10 @@ func (s *UDPorTCPRecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resol
 	}
 	resp, ok := results[queries[len(queries)-1]]
 	if ok {
+		// Clear glue records from resolver and replace with proof in ADDITIONAL section
+		resetExtras := make([]dns.RR, 0)
+		resp.Extra = resetExtras
+		// Include the proof.
 		resp.Extra = append(resp.Extra, &proof)
 	}
 	// Force set response ID to match query ID for dig warnings
@@ -56,6 +60,7 @@ func (s *UDPorTCPRecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resol
 
 	if !dnssecRequested {
 		answerRR := resp.Answer
+
 		newRR := make([]dns.RR, 0)
 		for _, rr := range answerRR {
 			if rr.Header().Rrtype == dns.TypeRRSIG {
