@@ -384,9 +384,11 @@ func makeRRsTraversable(rrs []dns.RR) (dns.Chain, error) {
 			return dns.Chain{}, errors.New("DNAME is not supported")
 		case *dns.CNAME:
 			return dns.Chain{}, errors.New("CNAME is not supported")
-		case *dns.A, *dns.TXT, *dns.AAAA, *dns.NS, *dns.MX:
+		case *dns.A, *dns.TXT, *dns.AAAA, *dns.NS, *dns.MX, *dns.NSEC, *dns.NSEC3:
 			currentZone.Leaves = append(currentZone.Leaves, t)
 			currentZone.NumLeaves = uint8(len(currentZone.Leaves))
+		case *dns.SOA:
+			continue
 		default:
 			return dns.Chain{}, errors.New("Type " + t.String() + " is not supported")
 		}
@@ -691,7 +693,12 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 	requiredDNSSECRecords := make([]dns.RR, 0)
 	for _, query := range queries {
 		if res, ok := results[query]; ok {
-			answers := res.Answer
+			var answers []dns.RR
+			if len(res.Answer) > 0 {
+				answers = res.Answer
+			} else {
+				answers = res.Ns
+			}
 			requiredDNSSECRecords = append(requiredDNSSECRecords, answers...)
 		}
 	}
@@ -729,7 +736,10 @@ func (s *RecursiveResolver) resolveQueryWithResolver(q *dns.Msg, r resolver) ([]
 		resp.Extra = make([]dns.RR, 0)
 	}
 
+	packStart := time.Now()
 	proofResponse, err := resp.Pack()
+	packEnd := time.Now()
+	log.Printf("[TIME TO SERIALIZE] %v\n", packEnd.Sub(packStart).Microseconds())
 
 	if err != nil {
 		log.Println("Failed encoding DNS response:", err)
